@@ -10,8 +10,13 @@
  *   T5 Oversized input   → email truncated to 254 chars (RFC 5321 max)
  */
 
-import { kv } from "@vercel/kv";
+import { Redis } from "@upstash/redis";
 import { NextRequest, NextResponse } from "next/server";
+
+const kv = new Redis({
+  url: process.env.KV_REST_API_URL!,
+  token: process.env.KV_REST_API_TOKEN!,
+});
 
 const EMAIL_RE = /^[^\s@]{1,64}@[^\s@]{1,255}\.[^\s@]{1,63}$/;
 const RATE_LIMIT = 3;
