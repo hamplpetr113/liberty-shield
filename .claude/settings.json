@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "INPUT=$(cat); FILE=$(echo \"$INPUT\" | grep -o '\"file_path\":\"[^\"]*\"' | sed 's/\"file_path\":\"//;s/\"$//'); PROJECT=\"C:/Users/phamp/OneDrive/Plocha/projekt\"; if [[ \"$FILE\" == \"$PROJECT\"* || \"$FILE\" == *\"OneDrive\\\\Plocha\\\\projekt\"* ]]; then cd \"$PROJECT\" 2>/dev/null && if [ -n \"$(git status --porcelain 2>/dev/null)\" ]; then git add -A && git commit -m \"auto: sync changes $(date +%Y-%m-%dT%H:%M:%S)\" && git push origin main; fi; fi 2>/dev/null || true",
+            "timeout": 30,
+            "statusMessage": "Pushing to GitHub..."
+          }
+        ]
+      }
+    ]
+  }
+}
