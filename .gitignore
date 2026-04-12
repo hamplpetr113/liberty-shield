@@ -14,6 +14,13 @@ node_modules/
 .env.local
 .env.*.local
 
+# Android secrets — never commit
+android/local.properties
+android/**/.gradle/
+android/**/build/
+android/**/*.keystore
+android/**/*.jks
+
 # OS
 .DS_Store
 Thumbs.db

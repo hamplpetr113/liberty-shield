@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Liberty Shield</string>
+    <string name="notification_channel_name">Sensor Monitor</string>
+    <string name="notification_channel_desc">Liberty Shield active protection monitoring</string>
+    <string name="notification_title">Liberty Shield Active</string>
+    <string name="notification_text">Monitoring microphone and camera access</string>
+</resources>
