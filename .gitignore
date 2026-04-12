@@ -20,6 +20,8 @@ android/**/.gradle/
 android/**/build/
 android/**/*.keystore
 android/**/*.jks
+# Gradle wrapper JAR is a binary — downloaded by CI
+android/gradle/wrapper/gradle-wrapper.jar
 
 # OS
 .DS_Store

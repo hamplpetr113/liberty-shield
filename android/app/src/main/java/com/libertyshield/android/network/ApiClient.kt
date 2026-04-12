@@ -33,12 +33,15 @@ object ApiClient {
 
     /**
      * Constructs the certificate pinner.
-     * The pin is injected at build time from local.properties via BuildConfig.CERT_PIN.
+     * SKIPPED in debug builds — allows testing with Charles/Proxyman and
+     * avoids dependency on the real production cert hash during development.
+     * ALWAYS active in release builds. The pin is injected at build time
+     * from local.properties via BuildConfig.CERT_PIN.
      *
-     * Pin format must be "sha256/<base64-encoded-spki-hash>".
-     * Example: "sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+     * Pin format: "sha256/<base64-encoded-spki-hash>"
      */
-    private fun buildCertificatePinner(): CertificatePinner {
+    private fun buildCertificatePinner(): CertificatePinner? {
+        if (BuildConfig.DEBUG) return null
         return CertificatePinner.Builder()
             .add(HOST, BuildConfig.CERT_PIN)
             .build()
@@ -77,9 +80,8 @@ object ApiClient {
      *   - Conditional logging (debug only)
      */
     fun buildOkHttpClient(): OkHttpClient {
-        return OkHttpClient.Builder()
-            .certificatePinner(buildCertificatePinner())
-            .connectTimeout(CONNECT_TIMEOUT_S, TimeUnit.SECONDS)
+        buildCertificatePinner()?.let { builder.certificatePinner(it) }
+        return builder
             .readTimeout(READ_TIMEOUT_S, TimeUnit.SECONDS)
             .writeTimeout(WRITE_TIMEOUT_S, TimeUnit.SECONDS)
             .addInterceptor(userAgentInterceptor)
