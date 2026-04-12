@@ -53,7 +53,7 @@ export default function DashboardPage() {
           <ModuleRow name="HSM" desc="Hardware Security Module" status="ok" />
           <ModuleRow name="mTLS" desc="Mutual TLS Termination" status="ok" />
           <ModuleRow name="Secret Sharding" desc="Shamir Secret Split" status="ok" />
-          <ModuleRow name="Mic/Cam Detector" desc="Sensor access monitor" status="pending" />
+          <ModuleRow name="Mic/Cam Detector" desc="Sensor access monitor" status="ok" href="/dashboard/sensors" />
         </div>
       </section>
     </main>
@@ -84,18 +84,20 @@ function ModuleRow({
   name,
   desc,
   status,
+  href,
 }: {
   name: string;
   desc: string;
   status: "ok" | "warn" | "pending";
+  href?: string;
 }) {
   const dot: Record<string, string> = {
     ok: "var(--green)",
     warn: "var(--yellow)",
     pending: "var(--text-muted)",
   };
-  return (
-    <div className={styles.moduleRow}>
+  const inner = (
+    <>
       <span
         className={styles.moduleDot}
         style={{ background: dot[status] }}
@@ -104,7 +106,14 @@ function ModuleRow({
       <span className={styles.moduleName}>{name}</span>
       <span className={styles.moduleDesc}>{desc}</span>
       <span className={styles.moduleStatus}>{status.toUpperCase()}</span>
-    </div>
+    </>
+  );
+  return href ? (
+    <a href={href} className={`${styles.moduleRow} ${styles.moduleRowLink}`}>
+      {inner}
+    </a>
+  ) : (
+    <div className={styles.moduleRow}>{inner}</div>
   );
 }
 

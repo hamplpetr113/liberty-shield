@@ -1,0 +1,199 @@
+.page {
+  min-height: 100vh;
+  padding: 24px;
+  max-width: 1000px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+
+/* ── Header ── */
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 16px;
+}
+
+.breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.back {
+  color: var(--accent);
+  text-decoration: none;
+}
+.back:hover { text-decoration: underline; }
+
+.sep { color: var(--border); }
+
+.badge {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  padding: 3px 10px;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  color: var(--accent);
+}
+
+/* ── Monitor ── */
+.monitor {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.section {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.sectionTitle {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.hint {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-family: ui-sans-serif, system-ui, sans-serif;
+}
+
+/* ── Browser sensor badges ── */
+.sensorGrid {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.sensorBadge {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  flex: 1;
+  min-width: 220px;
+}
+
+.sensorIcon { font-size: 22px; }
+
+.sensorLabel {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.sensorState {
+  font-size: 12px;
+  margin-top: 2px;
+}
+
+/* ── Log header ── */
+.logHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.pollOk  { font-size: 12px; color: var(--green); }
+.pollErr { font-size: 12px; color: var(--red); }
+.pollWait { font-size: 12px; color: var(--text-muted); }
+
+/* ── Empty state ── */
+.emptyLog {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 40px 20px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.emptyIcon { font-size: 32px; }
+
+.emptyHint {
+  font-size: 12px;
+  margin-top: 4px;
+}
+
+.emptyHint code {
+  background: var(--bg);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 11px;
+  color: var(--accent);
+}
+
+/* ── Log table ── */
+.logTable {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  font-size: 12px;
+}
+
+.logRow {
+  display: grid;
+  grid-template-columns: 90px 90px 70px 1fr 90px;
+  gap: 12px;
+  padding: 8px 10px;
+  border-radius: 4px;
+  align-items: center;
+}
+
+.logHead {
+  color: var(--text-muted);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  padding-bottom: 10px;
+}
+
+.rowStart { background: rgba(239, 68, 68, 0.05); }
+.rowStop  { background: transparent; }
+
+.logTs     { color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.logSensor { color: var(--text); }
+.logApp    { color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.logDevice { color: var(--text-muted); font-variant-numeric: tabular-nums; }
+
+.tagStart {
+  display: inline-block;
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: rgba(239, 68, 68, 0.15);
+  color: var(--red);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.tagStop {
+  display: inline-block;
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: rgba(34, 197, 94, 0.1);
+  color: var(--green);
+  font-size: 11px;
+  font-weight: 700;
+}

@@ -141,6 +141,11 @@
   background: var(--border);
 }
 
+.moduleRowLink {
+  text-decoration: none;
+  cursor: pointer;
+}
+
 .moduleDot {
   width: 8px;
   height: 8px;
