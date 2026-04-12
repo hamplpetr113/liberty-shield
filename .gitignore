@@ -1,1 +1,19 @@
+# Claude Code local settings
 .claude/settings.local.json
+
+# Next.js
+.next/
+out/
+node_modules/
+
+# Vercel
+.vercel/
+
+# Env files — never commit secrets
+.env
+.env.local
+.env.*.local
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,167 @@
+.main {
+  min-height: 100vh;
+  padding: 24px;
+  max-width: 1100px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 32px;
+}
+
+/* ── Header ── */
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 16px;
+}
+
+.logo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.logoIcon {
+  font-size: 22px;
+  color: var(--accent);
+}
+
+.logoText {
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  color: var(--text);
+}
+
+.badge {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  padding: 3px 10px;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  color: var(--accent);
+}
+
+/* ── Status Cards ── */
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 18px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.card_ok { border-left: 3px solid var(--green); }
+.card_warn { border-left: 3px solid var(--yellow); }
+.card_err { border-left: 3px solid var(--red); }
+
+.cardLabel {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  text-transform: uppercase;
+}
+
+.cardValue {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.cardDetail {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+/* ── Section titles ── */
+.sectionTitle {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 14px;
+}
+
+/* ── Mirror Labyrinth ── */
+.labyrinthSection {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 20px;
+}
+
+.labyrinthCanvas {
+  width: 100%;
+  overflow: hidden;
+}
+
+.labyrinthSvg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+/* ── Module List ── */
+.modulesSection {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 20px;
+}
+
+.moduleList {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.moduleRow {
+  display: grid;
+  grid-template-columns: 16px 140px 1fr 80px;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 8px;
+  border-radius: 4px;
+  transition: background 0.15s;
+}
+
+.moduleRow:hover {
+  background: var(--border);
+}
+
+.moduleDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.moduleName {
+  font-weight: 600;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.moduleDesc {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.moduleStatus {
+  text-align: right;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+}
