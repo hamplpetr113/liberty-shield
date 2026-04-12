@@ -96,11 +96,17 @@ if ! "$cygwin" && ! "$darwin" && ! "$nonstop" ; then
     esac
 fi
 
-# Collect all arguments for the java command;
-set -- \
+# Collect all arguments for the java command.
+# eval is required so the shell re-parses DEFAULT_JVM_OPTS and
+# splits it into individual tokens — without it the whole string
+# is passed as one argument and Java mistakes it for a class name.
+eval set -- \
+        "$DEFAULT_JVM_OPTS" \
+        $JAVA_OPTS \
+        $GRADLE_OPTS \
         "-Dorg.gradle.appname=$APP_BASE_NAME" \
         -classpath "$CLASSPATH" \
         org.gradle.wrapper.GradleWrapperMain \
-        "$@"
+        '"$@"'
 
-exec "$JAVACMD" "$DEFAULT_JVM_OPTS" $JAVA_OPTS $GRADLE_OPTS "$@"
+exec "$JAVACMD" "$@"
