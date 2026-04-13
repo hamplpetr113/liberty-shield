@@ -1,0 +1,209 @@
+/* ── Connection status bar ── */
+.statusBar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+}
+
+.statusDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  flex-shrink: 0;
+  transition: background 0.3s;
+}
+
+.statusDot[data-connected='true'] {
+  background: var(--green);
+  box-shadow: 0 0 6px var(--green);
+  animation: pulse 2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
+.statusLabel {
+  font-weight: 700;
+  color: var(--text);
+}
+
+.reconnectHint {
+  color: var(--text-muted);
+}
+
+.errorHint {
+  color: var(--red);
+  flex: 1;
+}
+
+.lockdownBadge {
+  margin-left: auto;
+  padding: 2px 10px;
+  border: 1px solid var(--red);
+  border-radius: 4px;
+  color: var(--red);
+  font-weight: 700;
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  animation: blink 1s step-start infinite;
+}
+
+@keyframes blink {
+  50% { opacity: 0.4; }
+}
+
+/* ── Skeleton ── */
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--surface) 25%,
+    var(--border) 50%,
+    var(--surface) 75%
+  );
+  background-size: 200% 100%;
+  border-radius: 4px;
+  animation: shimmer 1.4s infinite;
+}
+
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* ── Event Feed ── */
+.emptyFeed {
+  color: var(--text-muted);
+  font-size: 13px;
+  padding: 12px 0;
+}
+
+.eventList {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.eventRow {
+  display: grid;
+  grid-template-columns: 20px 1fr 60px 90px 40px 80px;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  transition: background 0.12s;
+}
+
+.eventRow:hover {
+  background: var(--border);
+}
+
+.eventSensor {
+  font-size: 14px;
+  text-align: center;
+}
+
+.eventPkg {
+  color: var(--text);
+  font-family: monospace;
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.eventAction {
+  font-weight: 700;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+}
+
+.eventRisk {
+  font-weight: 600;
+  font-size: 11px;
+}
+
+.msdBadge {
+  background: rgba(234, 179, 8, 0.12);
+  border: 1px solid rgba(234, 179, 8, 0.4);
+  border-radius: 3px;
+  color: #eab308;
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 4px;
+  letter-spacing: 0.06em;
+}
+
+.eventTs {
+  color: var(--text-muted);
+  font-size: 11px;
+  text-align: right;
+  font-family: monospace;
+}
+
+/* ── Threat list ── */
+.threatList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.threatRow {
+  display: grid;
+  grid-template-columns: 28px 1fr 140px 36px;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  transition: background 0.12s;
+}
+
+.threatRow:hover {
+  background: var(--border);
+}
+
+.threatRank {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  text-align: center;
+}
+
+.threatPkg {
+  color: var(--text);
+  font-family: monospace;
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.threatBar {
+  height: 4px;
+  background: var(--border);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.threatBarFill {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.4s ease;
+}
+
+.threatScore {
+  font-weight: 700;
+  font-size: 12px;
+  text-align: right;
+}

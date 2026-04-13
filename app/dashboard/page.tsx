@@ -1,4 +1,6 @@
-import styles from "./page.module.css";
+import { Suspense } from 'react'
+import styles from './page.module.css'
+import LiveDashboard from './LiveDashboard'
 
 export default function DashboardPage() {
   return (
@@ -11,32 +13,10 @@ export default function DashboardPage() {
         <span className={styles.badge}>FPQSS v1</span>
       </header>
 
-      <section className={styles.grid}>
-        <StatusCard
-          label="Shield Status"
-          value="ACTIVE"
-          status="ok"
-          detail="All layers nominal"
-        />
-        <StatusCard
-          label="PQC Layer"
-          value="ML-KEM + ML-DSA"
-          status="ok"
-          detail="Post-quantum keys loaded"
-        />
-        <StatusCard
-          label="Mesh VPN"
-          value="ONLINE"
-          status="ok"
-          detail="Zero-trust mesh active"
-        />
-        <StatusCard
-          label="Threat Level"
-          value="LOW"
-          status="ok"
-          detail="No anomalies detected"
-        />
-      </section>
+      {/* Live data sections — rendered client-side */}
+      <Suspense fallback={<DashboardSkeleton />}>
+        <LiveDashboard />
+      </Suspense>
 
       <section className={styles.labyrinthSection}>
         <h2 className={styles.sectionTitle}>Mirror Labyrinth</h2>
@@ -57,28 +37,26 @@ export default function DashboardPage() {
         </div>
       </section>
     </main>
-  );
+  )
 }
 
-function StatusCard({
-  label,
-  value,
-  status,
-  detail,
-}: {
-  label: string;
-  value: string;
-  status: "ok" | "warn" | "err";
-  detail: string;
-}) {
+// ── Skeleton fallback ─────────────────────────────────────────────────────────
+
+function DashboardSkeleton() {
   return (
-    <div className={`${styles.card} ${styles[`card_${status}`]}`}>
-      <div className={styles.cardLabel}>{label}</div>
-      <div className={styles.cardValue}>{value}</div>
-      <div className={styles.cardDetail}>{detail}</div>
-    </div>
-  );
+    <section className={styles.grid}>
+      {['Shield Status', 'Top Threat Score', 'Events / Hour', 'Lockdown'].map(label => (
+        <div key={label} className={`${styles.card} ${styles.card_ok}`}>
+          <div className={styles.cardLabel}>{label}</div>
+          <div className={styles.cardValue} style={{ color: 'var(--text-muted)' }}>—</div>
+          <div className={styles.cardDetail} style={{ color: 'var(--text-muted)' }}>Loading…</div>
+        </div>
+      ))}
+    </section>
+  )
 }
+
+// ── Static components ─────────────────────────────────────────────────────────
 
 function ModuleRow({
   name,
@@ -86,16 +64,16 @@ function ModuleRow({
   status,
   href,
 }: {
-  name: string;
-  desc: string;
-  status: "ok" | "warn" | "pending";
-  href?: string;
+  name: string
+  desc: string
+  status: 'ok' | 'warn' | 'pending'
+  href?: string
 }) {
   const dot: Record<string, string> = {
-    ok: "var(--green)",
-    warn: "var(--yellow)",
-    pending: "var(--text-muted)",
-  };
+    ok: 'var(--green)',
+    warn: 'var(--yellow)',
+    pending: 'var(--text-muted)',
+  }
   const inner = (
     <>
       <span
@@ -107,38 +85,38 @@ function ModuleRow({
       <span className={styles.moduleDesc}>{desc}</span>
       <span className={styles.moduleStatus}>{status.toUpperCase()}</span>
     </>
-  );
+  )
   return href ? (
     <a href={href} className={`${styles.moduleRow} ${styles.moduleRowLink}`}>
       {inner}
     </a>
   ) : (
     <div className={styles.moduleRow}>{inner}</div>
-  );
+  )
 }
 
 function MirrorLabyrinth() {
   const nodes = [
-    { id: "A", x: 50, y: 50 },
-    { id: "B", x: 150, y: 30 },
-    { id: "C", x: 250, y: 70 },
-    { id: "D", x: 350, y: 40 },
-    { id: "E", x: 100, y: 130 },
-    { id: "F", x: 200, y: 110 },
-    { id: "G", x: 300, y: 130 },
-    { id: "H", x: 400, y: 100 },
-    { id: "I", x: 150, y: 200 },
-    { id: "J", x: 300, y: 200 },
-  ];
+    { id: 'A', x: 50,  y: 50  },
+    { id: 'B', x: 150, y: 30  },
+    { id: 'C', x: 250, y: 70  },
+    { id: 'D', x: 350, y: 40  },
+    { id: 'E', x: 100, y: 130 },
+    { id: 'F', x: 200, y: 110 },
+    { id: 'G', x: 300, y: 130 },
+    { id: 'H', x: 400, y: 100 },
+    { id: 'I', x: 150, y: 200 },
+    { id: 'J', x: 300, y: 200 },
+  ]
 
   const edges = [
-    ["A", "B"], ["B", "C"], ["C", "D"],
-    ["A", "E"], ["B", "F"], ["C", "G"], ["D", "H"],
-    ["E", "F"], ["F", "G"], ["G", "H"],
-    ["E", "I"], ["G", "J"], ["I", "J"],
-  ];
+    ['A', 'B'], ['B', 'C'], ['C', 'D'],
+    ['A', 'E'], ['B', 'F'], ['C', 'G'], ['D', 'H'],
+    ['E', 'F'], ['F', 'G'], ['G', 'H'],
+    ['E', 'I'], ['G', 'J'], ['I', 'J'],
+  ]
 
-  const nodeMap = Object.fromEntries(nodes.map((n) => [n.id, n]));
+  const nodeMap = Object.fromEntries(nodes.map(n => [n.id, n]))
 
   return (
     <svg
@@ -159,8 +137,8 @@ function MirrorLabyrinth() {
       </defs>
 
       {edges.map(([a, b]) => {
-        const na = nodeMap[a];
-        const nb = nodeMap[b];
+        const na = nodeMap[a]
+        const nb = nodeMap[b]
         return (
           <line
             key={`${a}-${b}`}
@@ -170,15 +148,15 @@ function MirrorLabyrinth() {
             strokeWidth="1"
             strokeOpacity="0.4"
           />
-        );
+        )
       })}
 
-      {nodes.map((n) => (
+      {nodes.map(n => (
         <g key={n.id} filter="url(#glow)">
           <circle cx={n.x} cy={n.y} r="6" fill="#2563eb" fillOpacity="0.15" stroke="#2563eb" strokeWidth="1.5" />
           <circle cx={n.x} cy={n.y} r="2.5" fill="#60a5fa" />
         </g>
       ))}
     </svg>
-  );
+  )
 }
