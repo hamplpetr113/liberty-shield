@@ -3,9 +3,9 @@
  * This service runs permanently in the foreground.
  *
  * Detection method:
- *   - Polls AppOpsManager.getOpsForPackage() for ALL installed packages every POLL_MS
- *   - API 29+: OpEntry.isRunning() for accurate active detection
- *   - API 26-28: OpEntry.getLastAccessTime() within ACTIVE_THRESHOLD_MS
+ *   - Polls AppOpsManager.checkOpNoThrow() for ALL installed packages every POLL_MS
+ *   - Public API — works on all supported API levels (26+)
+ *   - Returns MODE_ALLOWED when the system has granted the op to that package
  *
  * Risks:
  *   - Polling battery impact → mitigated by 2s interval + doze awareness

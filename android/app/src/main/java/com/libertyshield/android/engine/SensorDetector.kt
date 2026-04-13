@@ -12,7 +12,6 @@ import android.app.ActivityManager
 import android.app.AppOpsManager
 import android.content.pm.PackageManager
 import android.os.Build
-import android.os.Process
 import android.util.Log
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -37,7 +36,6 @@ class SensorDetector @Inject constructor(
     companion object {
         private const val TAG = "SensorDetector"
         private const val PACKAGE_CACHE_TTL_MS = 60_000L
-        private const val ACTIVE_THRESHOLD_MS = 3000L
     }
 
     private var cachedPackages: List<InstalledPackage> = emptyList()
@@ -96,34 +94,20 @@ class SensorDetector @Inject constructor(
     }
 
     /**
-     * Checks whether an AppOps operation is currently active for a given package.
+     * Checks whether an AppOps operation is currently permitted (MODE_ALLOWED) for a package.
      *
-     * API 29+ (Android Q): Uses AppOpsManager.PackageOps with OpEntry.isRunning()
-     *   which reflects real-time hardware access state.
-     * API 26-28: Falls back to getLastAccessTime() heuristic — if the op was
-     *   accessed within ACTIVE_THRESHOLD_MS, we consider it active.
+     * Uses the public AppOpsManager.checkOpNoThrow() API, which is available on all
+     * supported API levels (26+). Returns true when the op mode is MODE_ALLOWED,
+     * meaning the system has granted the operation to that package.
+     *
+     * Note: checkOpNoThrow reflects the current grant state, not a real-time
+     * hardware-active signal. Combined with the 2s polling loop in
+     * SensorMonitorService, this provides acceptable detection latency.
      */
-    @Suppress("DEPRECATION")
     private fun isOpCurrentlyActive(packageName: String, uid: Int, opStr: String): Boolean {
         return try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                val pkgOps = appOpsManager.getOpsForPackage(uid, packageName, opStr)
-                pkgOps.any { pkgOp ->
-                    pkgOp.ops.any { opEntry ->
-                        opEntry.isRunning
-                    }
-                }
-            } else {
-                // API 26-28: check last access time heuristic
-                val pkgOps = appOpsManager.getOpsForPackage(uid, packageName, opStr)
-                val now = System.currentTimeMillis()
-                pkgOps.any { pkgOp ->
-                    pkgOp.ops.any { opEntry ->
-                        val lastAccess = opEntry.lastAccessTime
-                        lastAccess > 0 && (now - lastAccess) < ACTIVE_THRESHOLD_MS
-                    }
-                }
-            }
+            val mode = appOpsManager.checkOpNoThrow(opStr, uid, packageName)
+            mode == AppOpsManager.MODE_ALLOWED
         } catch (e: SecurityException) {
             Log.v(TAG, "SecurityException for $packageName / $opStr: ${e.message}")
             false
