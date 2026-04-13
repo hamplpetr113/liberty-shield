@@ -43,7 +43,7 @@ jobs:
           sdk.dir=$ANDROID_HOME
           SENSOR_API_KEY=${{ secrets.SENSOR_API_KEY }}
           API_BASE_URL=${{ secrets.API_BASE_URL || 'https://liberty-shield-ingest.railway.app' }}
-          CERT_PIN=sha256/debug-placeholder-pin-not-used-in-debug-builds
+          CERT_PIN=${{ secrets.CERT_PIN || 'sha256/DcA9ThCanTtxROdsyvrG3ntoxI3gEcXvTwLibemNdPM=' }}
           EOF
 
       - name: Cache Gradle packages
