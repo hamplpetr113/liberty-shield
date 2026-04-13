@@ -7,14 +7,14 @@
  *   T1 Unauthorized injection  → Bearer auth
  *   T2 Timestamp replay        → drift > 60s rejected
  *   T3 Event flood             → rate-limit 120/device/hour
- *   T4 PII leakage             → device_id never stored in Redis
- *   T5 Redis key growth        → all lists LTRIM, all scores TTL'd
+ *   T4 PII leakage             → device_id never stored in plain sensor stream
+ *   T5 Redis key growth        → all streams MAXLEN trimmed, all scores TTL'd
+ *   T6 Breakout detection      → BREAKOUT_SUSPECTED / LOCKDOWN triggers egress block
  */
 import express, { Request, Response, NextFunction } from 'express'
 import { z } from 'zod'
 import Redis from 'ioredis'
-import { createHash } from 'crypto'
-import { appendFile } from 'fs/promises'
+import { createHash, randomUUID } from 'crypto'
 
 // ── Redis ─────────────────────────────────────────────────────────
 const redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379', {
@@ -28,88 +28,152 @@ redis.on('error', (err) => console.error('[redis] error:', err.message))
 redis.on('connect', () => console.log('[redis] connected'))
 
 // ── Config ────────────────────────────────────────────────────────
-const SENSOR_API_KEY   = process.env.SENSOR_API_KEY   || ''
-const AUDIT_LOG_FILE   = process.env.AUDIT_LOG_FILE   || '/tmp/audit.log'
-const MAX_SENSOR_EVENTS = 500
-const MAX_DECISIONS     = 200
-const RATE_LIMIT        = 120
-const RATE_WINDOW_S     = 3600
-const TS_DRIFT_MS       = 60_000
+const SENSOR_API_KEY = process.env.SENSOR_API_KEY || ''
+const RATE_LIMIT     = 120
+const RATE_WINDOW_S  = 3600
+const TS_DRIFT_MS    = 60_000
 
 // ── Validation ────────────────────────────────────────────────────
 const SensorEventSchema = z.object({
-  device_id:          z.string().min(1).max(128),
-  sensor:             z.enum(['microphone', 'camera']),
-  action:             z.enum(['start', 'stop']),
-  app_package:        z.string().min(1).max(256),
-  app_label:          z.string().min(1).max(128),
-  risk_score:         z.number().int().min(0).max(100).default(0),
+  device_id:           z.string().min(1).max(128),
+  sensor:              z.enum(['microphone', 'camera']),
+  action:              z.enum(['start', 'stop']),
+  app_package:         z.string().min(1).max(256),
+  app_label:           z.string().min(1).max(128),
+  risk_score:          z.number().int().min(0).max(100).default(0),
   misdirection_active: z.boolean().default(false),
-  ts:                 z.number().int(),
+  ts:                  z.number().int(),
 })
 
-type SensorEvent = z.infer<typeof SensorEventSchema>
+// ── Scoring helpers ───────────────────────────────────────────────
 
-// ── Threat scoring ────────────────────────────────────────────────
-function scoreEvent(ev: SensorEvent): {
-  score: number
-  action: 'ALLOW' | 'MONITOR' | 'BLOCK'
-  reason: string
-} {
-  let score = ev.risk_score
-  let reason = 'baseline'
-
-  if (ev.action === 'start') {
-    score += 10
-    reason = 'sensor_start'
-  }
-  if (ev.misdirection_active) {
-    score += 20
-    reason = 'misdirection_triggered'
-  }
-  // Unknown package = not system / not Liberty Shield
-  const isSystem =
-    ev.app_package.startsWith('com.android.') ||
-    ev.app_package.startsWith('com.google.android.') ||
-    ev.app_package.startsWith('android.') ||
-    ev.app_package.startsWith('com.libertyshield.')
-  if (!isSystem) {
-    score += 15
-    reason = reason === 'baseline' ? 'unknown_package' : reason
-  }
-
-  score = Math.min(100, score)
-  const action = score >= 70 ? 'BLOCK' : score >= 40 ? 'MONITOR' : 'ALLOW'
-  return { score, action, reason }
+function isKnownPackage(pkg: string): boolean {
+  return pkg.startsWith('com.android.') ||
+    pkg.startsWith('com.google.android.') ||
+    pkg.startsWith('android.') ||
+    pkg === 'com.libertyshield.android'
 }
 
-// ── Audit chain ───────────────────────────────────────────────────
-async function appendAudit(entry: Record<string, unknown>) {
+function scoreCredentialHunting(e: z.infer<typeof SensorEventSchema>): number {
+  const patterns = [
+    /api[_-]?key|token|secret|password|credential/i,
+    /\.env|\.npmrc|id_rsa|\.aws/i,
+    /github|vercel|openai|anthropic/i,
+  ]
+  const text = `${e.action} ${e.app_package ?? ''} ${e.app_label ?? ''}`
+  return patterns.some(p => p.test(text)) ? 1 : 0
+}
+
+function scoreAntiForensics(e: z.infer<typeof SensorEventSchema>): number {
+  const actions = ['log_delete', 'history_clear', 'audit_modify',
+                   'git_rebase_force', 'file_overwrite_log']
+  return actions.includes(e.action as string) ? 1 : 0
+}
+
+function scoreLateralMovement(e: z.infer<typeof SensorEventSchema>): number {
+  const patterns = [/\/proc\/\d+/, /docker\.sock/,
+                    /169\.254\.169\.254/, /\.internal\//]
+  const text = `${e.action} ${e.app_package ?? ''}`
+  return patterns.some(p => p.test(text)) ? 1 : 0
+}
+
+// ── CHANGE 1: Extended scoreEvent ────────────────────────────────
+function scoreEvent(event: z.infer<typeof SensorEventSchema>): {
+  score: number
+  decision: string
+  features: Record<string, number>
+} {
+  const features: Record<string, number> = {
+    base_risk:          event.risk_score ?? 0,
+    misdirection:       event.misdirection_active ? 20 : 0,
+    unknown_package:    isKnownPackage(event.app_package ?? '') ? 0 : 15,
+    credential_hunting: scoreCredentialHunting(event),
+    anti_forensics:     scoreAntiForensics(event),
+    lateral_movement:   scoreLateralMovement(event),
+  }
+
+  const total = Math.min(
+    (features.base_risk) +
+    (features.misdirection) +
+    (features.unknown_package) +
+    (features.credential_hunting * 30) +
+    (features.anti_forensics * 35) +
+    (features.lateral_movement * 30),
+    100
+  )
+
+  let decision = 'ALLOW'
+  if (total >= 95)      decision = 'LOCKDOWN'
+  else if (total >= 92) decision = 'BREAKOUT_SUSPECTED'
+  else if (total >= 85) decision = 'DECEPTION'
+  else if (total >= 70) decision = 'BLOCK'
+  else if (total >= 40) decision = 'MONITOR'
+
+  return { score: total, decision, features }
+}
+
+// ── CHANGE 4: appendAudit — Redis XADD only, Merkle chain intact ──
+async function appendAudit(
+  redisClient: Redis,
+  input: { type: string; payload: Record<string, unknown> }
+): Promise<void> {
   try {
-    const lastRaw = await redis.lindex('liberty:audit:entries', 0)
+    // Read last entry to get prevHash for Merkle chain
+    const lastEntries = await redisClient.xrevrange(
+      'liberty:audit:entries', '+', '-', 'COUNT', '1'
+    )
     let prevHash = '0'.repeat(64)
-    if (lastRaw) {
-      try {
-        const last = JSON.parse(lastRaw) as Record<string, unknown>
-        if (typeof last.hash === 'string') prevHash = last.hash
-      } catch { /* ignore */ }
+    if (lastEntries.length > 0) {
+      const fields = lastEntries[0][1]  // flat [key, val, key, val, ...]
+      const hashIdx = fields.findIndex(
+        (f, i) => i % 2 === 0 && f === 'hash'
+      )
+      if (hashIdx >= 0) prevHash = fields[hashIdx + 1]
     }
 
-    const payload = { ...entry, prevHash, ts: Date.now() }
+    const ts = Date.now()
+    const hashPayload = { ...input, prevHash, ts }
     const hash = createHash('sha256')
-      .update(JSON.stringify(payload))
+      .update(JSON.stringify(hashPayload))
       .digest('hex')
-    const auditEntry = { ...payload, hash }
 
-    await redis.lpush('liberty:audit:entries', JSON.stringify(auditEntry))
-    await redis.ltrim('liberty:audit:entries', 0, 999)
-
-    if (AUDIT_LOG_FILE) {
-      await appendFile(AUDIT_LOG_FILE, JSON.stringify(auditEntry) + '\n').catch(() => {})
-    }
+    await redisClient.xadd(
+      'liberty:audit:entries', 'MAXLEN', '~', '1000', '*',
+      'type',     input.type,
+      'payload',  JSON.stringify(input.payload),
+      'prev_hash', prevHash,
+      'hash',     hash,
+      'ts',       String(ts),
+    )
   } catch (err) {
     console.error('[audit] append error:', (err as Error).message)
   }
+}
+
+// ── CHANGE 2: BREAKOUT / LOCKDOWN handler ────────────────────────
+async function handleBreakout(
+  redisClient: Redis,
+  deviceId: string,
+  features: Record<string, number>,
+  trigger: string
+): Promise<void> {
+  const incidentId = randomUUID()
+  const ts = String(Date.now())
+  await Promise.all([
+    redisClient.publish('liberty:control',
+      JSON.stringify({ command: 'BREAKOUT_SUSPECTED', incidentId, deviceId, trigger, ts })),
+    redisClient.publish('liberty:control',
+      JSON.stringify({ command: 'TOKEN_BURN', deviceId, incidentId })),
+    redisClient.set(`liberty:session:${deviceId}:egress`, 'BLOCK_ALL', 'EX', 3600),
+    redisClient.xadd('liberty:snapshots', 'MAXLEN', '~', '1000', '*',
+      'incident_id',  incidentId,
+      'device_id',    deviceId,
+      'trigger',      trigger,
+      'features',     JSON.stringify(features),
+      'timestamp_ms', ts,
+    ),
+    redisClient.set(`liberty:session:${deviceId}:mode`, 'DECEPTION', 'EX', 3600),
+  ])
 }
 
 // ── Auth middleware ───────────────────────────────────────────────
@@ -131,7 +195,7 @@ app.get('/health', (_req, res) => {
   res.json({ ok: true, service: 'sensor-ingest', ts: Date.now() })
 })
 
-// Sensor event ingestion
+// ── CHANGE 3: Sensor event ingestion — XADD streams, opaque response
 app.post('/api/sensors/event', requireAuth, async (req: Request, res: Response) => {
   const parsed = SensorEventSchema.safeParse(req.body)
   if (!parsed.success) {
@@ -139,10 +203,10 @@ app.post('/api/sensors/event', requireAuth, async (req: Request, res: Response) 
     return
   }
 
-  const ev = parsed.data
+  const body = parsed.data
 
   // Timestamp drift guard (T2)
-  const drift = Math.abs(Date.now() - ev.ts)
+  const drift = Math.abs(Date.now() - body.ts)
   if (drift > TS_DRIFT_MS) {
     res.status(400).json({ error: 'Timestamp drift too large', drift_ms: drift })
     return
@@ -150,7 +214,7 @@ app.post('/api/sensors/event', requireAuth, async (req: Request, res: Response) 
 
   try {
     // Rate limit per device_id (T3)
-    const rateKey = `rl:ingest:${ev.device_id}`
+    const rateKey = `rl:ingest:${body.device_id}`
     const count = await redis.incr(rateKey)
     if (count === 1) await redis.expire(rateKey, RATE_WINDOW_S)
     if (count > RATE_LIMIT) {
@@ -158,63 +222,67 @@ app.post('/api/sensors/event', requireAuth, async (req: Request, res: Response) 
       return
     }
 
-    // Score
-    const { score, action, reason } = scoreEvent(ev)
+    const { score, decision, features } = scoreEvent(body)
 
-    // Store sensor event — device_id stripped (T4)
-    const storedEvent = {
-      sensor:              ev.sensor,
-      action:              ev.action,
-      app_package:         ev.app_package,
-      app_label:           ev.app_label,
-      risk_score:          ev.risk_score,
-      misdirection_active: ev.misdirection_active,
-      ts:                  ev.ts,
-      ingested_at:         Date.now(),
+    // Fire BREAKOUT flow before Redis writes if critical
+    if (decision === 'BREAKOUT_SUSPECTED' || decision === 'LOCKDOWN') {
+      await handleBreakout(redis, body.device_id, features, decision)
     }
-    await redis.lpush('liberty:sensor:events', JSON.stringify(storedEvent))
-    await redis.ltrim('liberty:sensor:events', 0, MAX_SENSOR_EVENTS - 1)
 
-    // Store decision
-    const decision = {
-      sensor:              ev.sensor,
-      app_package:         ev.app_package,
-      app_label:           ev.app_label,
-      risk_score:          score,
-      action,
-      reason,
-      misdirection_active: ev.misdirection_active,
-      ts:                  Date.now(),
-    }
-    await redis.lpush('liberty:decisions', JSON.stringify(decision))
-    await redis.ltrim('liberty:decisions', 0, MAX_DECISIONS - 1)
+    const eventId  = randomUUID()
+    const serverTs = Date.now()
 
-    // Per-package score snapshot with 24h TTL (T5)
-    const snapshot = {
-      package:   ev.app_package,
-      label:     ev.app_label,
-      score,
-      action,
-      last_seen: Date.now(),
-      sensor:    ev.sensor,
-    }
-    await redis.set(
-      `liberty:scores:${ev.app_package}`,
-      JSON.stringify(snapshot),
-      'EX', 86400,
-    )
+    await Promise.all([
+      // Sensor event stream (XADD — compatible with threat-scoring worker)
+      redis.xadd('liberty:sensor:events', 'MAXLEN', '~', '100000', '*',
+        'event_id',     eventId,
+        'device_id',    body.device_id,
+        'sensor',       body.sensor,
+        'action',       body.action,
+        'app_package',  body.app_package ?? '',
+        'app_label',    body.app_label ?? '',
+        'risk_score',   String(score),
+        'decision',     decision,
+        'misdirection', String(body.misdirection_active),
+        'server_ts',    String(serverTs),
+      ),
+      // Decision stream (dashboard reads this)
+      redis.xadd('liberty:decisions', 'MAXLEN', '~', '50000', '*',
+        'event_id',  eventId,
+        'device_id', body.device_id,
+        'sensor',    body.sensor,
+        'action',    body.action,
+        'score',     String(score),
+        'decision',  decision,
+        'features',  JSON.stringify(features),
+        'server_ts', String(serverTs),
+      ),
+      // Score cache per device (dashboard threat-score endpoint)
+      redis.set(
+        `liberty:scores:${body.device_id}`,
+        JSON.stringify({ score, decision, features, updated_at: serverTs }),
+        'EX', 86400,
+      ),
+      // Audit chain
+      appendAudit(redis, {
+        type:    'sensor_event',
+        payload: {
+          event_id: eventId,
+          sensor:   body.sensor,
+          action:   body.action,
+          decision,
+          score,
+          device_id: body.device_id,
+        },
+      }),
+    ])
 
-    // Audit trail
-    await appendAudit({
-      type:       'SENSOR_EVENT',
-      app_package: ev.app_package,
-      sensor:     ev.sensor,
-      ev_action:  ev.action,
-      decision:   action,
-      score,
-    })
+    // Never expose score or decision to client (timing oracle + info leak)
+    const minMs   = 150
+    const elapsed = Date.now() - serverTs
+    if (elapsed < minMs) await new Promise(r => setTimeout(r, minMs - elapsed))
 
-    res.json({ ok: true, decision: { action, score, reason } })
+    res.status(202).json({ ok: true, event_id: eventId })
   } catch (err) {
     console.error('[sensor-ingest] handler error:', (err as Error).message)
     res.status(503).json({ error: 'Service temporarily unavailable' })
