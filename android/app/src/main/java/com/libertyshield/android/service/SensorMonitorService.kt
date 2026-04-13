@@ -28,6 +28,7 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
+import com.libertyshield.android.LibertyShieldApp
 import com.libertyshield.android.R
 import com.libertyshield.android.data.repository.EventRepository
 import com.libertyshield.android.engine.MisdirectionEngine
@@ -67,7 +68,9 @@ class SensorMonitorService : Service() {
     companion object {
         private const val TAG = "SensorMonitorService"
         const val NOTIFICATION_ID = 1001
-        const val CHANNEL_ID = "liberty_shield_monitor"
+        // Use the channel ID defined in LibertyShieldApp so it is always created
+        // before startForeground() is called, even on cold boot via BootReceiver.
+        val CHANNEL_ID get() = LibertyShieldApp.NOTIFICATION_CHANNEL_ID
         private const val POLL_MS = 2000L
         private const val ACTIVE_THRESHOLD_MS = 3000L
         private const val REPEAT_WINDOW_MS = 60_000L
@@ -300,13 +303,20 @@ class SensorMonitorService : Service() {
 
     // ===== NOTIFICATION =====
 
+    /**
+     * Ensures the notification channel exists before startForeground() is called.
+     * Normally the channel is created in LibertyShieldApp.onCreate(), but we create
+     * it here as a safety net for the BootReceiver path where Application.onCreate()
+     * runs but the channel may not have been registered yet on older ROMs.
+     * Safe to call multiple times — NotificationManager ignores duplicate creates.
+     */
     private fun createNotificationChannel() {
         val channel = NotificationChannel(
             CHANNEL_ID,
-            getString(R.string.notification_channel_name),
+            "Liberty Shield Protection",
             NotificationManager.IMPORTANCE_LOW
         ).apply {
-            description = getString(R.string.notification_channel_desc)
+            description = "Liberty Shield is actively protecting your device"
             setShowBadge(false)
             enableVibration(false)
             enableLights(false)
@@ -318,7 +328,7 @@ class SensorMonitorService : Service() {
     private fun buildNotification() = NotificationCompat.Builder(this, CHANNEL_ID)
         .setContentTitle(getString(R.string.notification_title))
         .setContentText(getString(R.string.notification_text))
-        .setSmallIcon(android.R.drawable.ic_lock_idle_lock)
+        .setSmallIcon(R.drawable.ic_notification)
         .setOngoing(true)
         .setPriority(NotificationCompat.PRIORITY_LOW)
         .setContentIntent(

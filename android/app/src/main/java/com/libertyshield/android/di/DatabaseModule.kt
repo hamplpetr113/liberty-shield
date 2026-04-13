@@ -148,15 +148,28 @@ object DatabaseModule {
     }
 
     private fun getEncryptedPrefs(context: Context): android.content.SharedPreferences {
-        val masterKey = MasterKey.Builder(context)
-            .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-            .build()
-        return EncryptedSharedPreferences.create(
-            context,
-            PREFS_FILE,
-            masterKey,
-            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-        )
+        // Attempt 1: full Keystore-backed encrypted prefs.
+        // setRequestStrongBoxBacked(false) avoids StrongBox failures on Samsung/Xiaomi
+        // devices where the secure enclave is present but unreliable on first boot.
+        return try {
+            val masterKey = MasterKey.Builder(context)
+                .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+                .setRequestStrongBoxBacked(false)
+                .build()
+            EncryptedSharedPreferences.create(
+                context,
+                PREFS_FILE,
+                masterKey,
+                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "EncryptedSharedPreferences init failed — generating fresh DB passphrase. " +
+                "This may happen on first launch on some OEM devices.", e)
+            // Attempt 2: plaintext fallback prefs so the DB passphrase can still be
+            // generated and stored. Security is degraded but the app stays functional.
+            // A fresh passphrase will be generated in generateAndStoreNewPassphrase().
+            context.getSharedPreferences("${PREFS_FILE}_fallback", android.content.Context.MODE_PRIVATE)
+        }
     }
 }

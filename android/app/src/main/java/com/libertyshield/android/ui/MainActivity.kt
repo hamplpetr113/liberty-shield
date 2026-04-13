@@ -87,31 +87,39 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
+        try {
+            super.onCreate(savedInstanceState)
 
-        // SECURITY: Prevent screenshots and Recents thumbnails
-        window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+            // SECURITY: Prevent screenshots and Recents thumbnails
+            window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
 
-        checkAndRequestPermissions()
+            // Request permissions — do NOT start the service here.
+            // The service is only started when the user presses "Start" in HomeScreen,
+            // by which point all required permissions are already confirmed.
+            checkAndRequestPermissions()
 
-        setContent {
-            LibertyShieldTheme {
-                if (showPermissionRationale) {
-                    PermissionRationaleDialog(
-                        permissions = pendingPermissions,
-                        onConfirm = {
-                            showPermissionRationale = false
-                            permissionLauncher.launch(pendingPermissions)
-                        },
-                        onDismiss = {
-                            showPermissionRationale = false
-                            // Request anyway — user can deny in system dialog
-                            permissionLauncher.launch(pendingPermissions)
-                        }
-                    )
+            setContent {
+                LibertyShieldTheme {
+                    if (showPermissionRationale) {
+                        PermissionRationaleDialog(
+                            permissions = pendingPermissions,
+                            onConfirm = {
+                                showPermissionRationale = false
+                                permissionLauncher.launch(pendingPermissions)
+                            },
+                            onDismiss = {
+                                showPermissionRationale = false
+                                // Request anyway — user can deny in system dialog
+                                permissionLauncher.launch(pendingPermissions)
+                            }
+                        )
+                    }
+                    LibertyShieldApp()
                 }
-                LibertyShieldApp()
             }
+        } catch (e: Exception) {
+            android.util.Log.e("LibertyShield", "CRASH in MainActivity.onCreate: ${e.message}", e)
+            throw e
         }
     }
 
