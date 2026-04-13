@@ -80,6 +80,8 @@ object ApiClient {
      *   - Conditional logging (debug only)
      */
     fun buildOkHttpClient(): OkHttpClient {
+        val builder = OkHttpClient.Builder()
+            .connectTimeout(CONNECT_TIMEOUT_S, TimeUnit.SECONDS)
         buildCertificatePinner()?.let { builder.certificatePinner(it) }
         return builder
             .readTimeout(READ_TIMEOUT_S, TimeUnit.SECONDS)
