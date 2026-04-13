@@ -17,6 +17,7 @@ import android.util.Log
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
 import dagger.hilt.android.HiltAndroidApp
+import net.sqlcipher.database.SQLiteDatabase
 import javax.inject.Inject
 
 @HiltAndroidApp
@@ -33,6 +34,11 @@ class LibertyShieldApp : Application(), Configuration.Provider {
     override fun onCreate() {
         try {
             super.onCreate()
+            // Load SQLCipher native libs FIRST — must happen before any SupportFactory
+            // instantiation in DatabaseModule. Throws UnsatisfiedLinkError (an Error, not
+            // Exception) if the .so files are missing; caught by the Throwable handler below.
+            SQLiteDatabase.loadLibs(this)
+
             // Create notification channel BEFORE anything else that may start a service.
             // This must happen in Application.onCreate() so the channel exists even if the
             // service is started by BootReceiver before the Activity is ever opened.
@@ -41,7 +47,7 @@ class LibertyShieldApp : Application(), Configuration.Provider {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                 enableStrictModeInDebug()
             }
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             Log.e(TAG, "CRASH in Application.onCreate: ${e.message}", e)
             throw e
         }

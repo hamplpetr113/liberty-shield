@@ -117,7 +117,7 @@ class MainActivity : ComponentActivity() {
                     LibertyShieldApp()
                 }
             }
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             android.util.Log.e("LibertyShield", "CRASH in MainActivity.onCreate: ${e.message}", e)
             throw e
         }

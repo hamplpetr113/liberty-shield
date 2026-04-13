@@ -14,8 +14,6 @@ import android.app.ActivityManager
 import android.app.AppOpsManager
 import android.content.Context
 import android.content.pm.PackageManager
-import com.libertyshield.android.engine.MisdirectionEngine
-import com.libertyshield.android.engine.SensorDetector
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -57,29 +55,9 @@ object AppModule {
         return context.packageManager
     }
 
-    /**
-     * Provides the SensorDetector engine.
-     * Singleton because it maintains an in-memory package cache (60s TTL).
-     * Multiple instances would defeat the cache optimization.
-     */
-    @Provides
-    @Singleton
-    fun provideSensorDetector(
-        appOpsManager: AppOpsManager,
-        packageManager: PackageManager,
-        activityManager: ActivityManager
-    ): SensorDetector {
-        return SensorDetector(appOpsManager, packageManager, activityManager)
-    }
-
-    /**
-     * Provides the MisdirectionEngine.
-     * Singleton because it manages AudioTrack and torch state.
-     * Multiple instances would cause AudioTrack resource conflicts.
-     */
-    @Provides
-    @Singleton
-    fun provideMisdirectionEngine(): MisdirectionEngine {
-        return MisdirectionEngine()
-    }
+    // NOTE: SensorDetector and MisdirectionEngine are NOT provided here.
+    // Both classes carry @Singleton + @Inject constructor, which is sufficient
+    // for Hilt to construct and scope them automatically.
+    // Adding a duplicate @Provides for those types causes a Dagger
+    // "duplicate binding" error in Hilt 2.44+ and was removed.
 }

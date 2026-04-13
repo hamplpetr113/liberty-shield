@@ -13,6 +13,7 @@ import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import net.sqlcipher.database.SQLiteDatabase
 import net.sqlcipher.database.SupportFactory
 
 @Database(
@@ -37,6 +38,9 @@ abstract class AppDatabase : RoomDatabase() {
          *                   this array after the database is opened.
          */
         fun create(context: Context, passphrase: ByteArray): AppDatabase {
+            // loadLibs is idempotent — calling it here as a safety net for any code path
+            // that reaches create() without going through LibertyShieldApp.onCreate().
+            SQLiteDatabase.loadLibs(context)
             val factory = SupportFactory(passphrase)
             return Room.databaseBuilder(
                 context.applicationContext,

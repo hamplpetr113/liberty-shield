@@ -56,8 +56,11 @@ object DatabaseModule {
         val passphrase = getOrCreatePassphrase(context)
         return try {
             AppDatabase.create(context, passphrase)
+        } catch (e: Throwable) {
+            Log.e(TAG, "AppDatabase.create() failed — UnsatisfiedLinkError or Keystore issue: ${e.message}", e)
+            throw e
         } finally {
-            // Zero passphrase bytes after DB is opened
+            // Zero passphrase bytes after DB is opened (or on failure)
             passphrase.fill(0)
         }
     }
