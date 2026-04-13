@@ -28,7 +28,6 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
-import com.libertyshield.android.BuildConfig
 import com.libertyshield.android.R
 import com.libertyshield.android.data.repository.EventRepository
 import com.libertyshield.android.engine.MisdirectionEngine

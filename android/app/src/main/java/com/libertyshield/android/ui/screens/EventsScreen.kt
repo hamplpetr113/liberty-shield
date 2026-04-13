@@ -89,7 +89,7 @@ fun EventsScreen(
             contentPadding = PaddingValues(horizontal = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            items(EventFilter.values()) { filter ->
+            items(EventFilter.values().toList()) { filter ->
                 FilterChip(
                     selected = activeFilter == filter,
                     onClick = { viewModel.setFilter(filter) },
