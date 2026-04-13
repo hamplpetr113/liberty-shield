@@ -42,6 +42,7 @@ jobs:
           cat > android/local.properties << EOF
           sdk.dir=$ANDROID_HOME
           SENSOR_API_KEY=${{ secrets.SENSOR_API_KEY }}
+          API_BASE_URL=${{ secrets.API_BASE_URL || 'https://liberty-shield-ingest.railway.app' }}
           CERT_PIN=sha256/debug-placeholder-pin-not-used-in-debug-builds
           EOF
 

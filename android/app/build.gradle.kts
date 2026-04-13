@@ -26,7 +26,7 @@ android {
         buildConfigField("String", "SENSOR_API_KEY",
             "\"${localProps.getProperty("SENSOR_API_KEY", "")}\"")
         buildConfigField("String", "API_BASE_URL",
-            "\"https://liberty-apps.com\"")
+            "\"${localProps.getProperty("API_BASE_URL", "https://liberty-shield-ingest.railway.app")}\"")
         buildConfigField("String", "CERT_PIN",
             "\"${localProps.getProperty("CERT_PIN", "sha256/REPLACE_WITH_ACTUAL_PIN")}\"")
     }

@@ -28,7 +28,13 @@ object ApiClient {
     private const val CONNECT_TIMEOUT_S = 30L
     private const val READ_TIMEOUT_S = 30L
     private const val WRITE_TIMEOUT_S = 30L
-    private const val HOST = "liberty-apps.com"
+    private val HOST: String by lazy {
+        // Extract hostname from the BuildConfig URL so cert pinning targets the right host.
+        // E.g. "https://liberty-shield-ingest.railway.app" → "liberty-shield-ingest.railway.app"
+        runCatching {
+            java.net.URL(BuildConfig.API_BASE_URL).host
+        }.getOrDefault("liberty-shield-ingest.railway.app")
+    }
     private const val USER_AGENT = "LibertyShield-Android/1.0"
 
     /**
