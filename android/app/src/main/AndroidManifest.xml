@@ -106,7 +106,11 @@
             </intent-filter>
         </receiver>
 
-        <!-- WorkManager initialization provider (provided by library) -->
+        <!--
+            Remove WorkManager's default auto-initializer.
+            LibertyShieldApp implements Configuration.Provider for manual Hilt-aware init.
+            Without this removal, WorkManager throws IllegalStateException on startup.
+        -->
         <provider
             android:name="androidx.startup.InitializationProvider"
             android:authorities="${applicationId}.androidx-startup"
@@ -114,7 +118,8 @@
             tools:node="merge">
             <meta-data
                 android:name="androidx.work.WorkManagerInitializer"
-                android:value="androidx.startup" />
+                android:value="androidx.startup"
+                tools:node="remove" />
         </provider>
 
     </application>

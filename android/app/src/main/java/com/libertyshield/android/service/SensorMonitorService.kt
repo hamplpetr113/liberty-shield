@@ -21,13 +21,14 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
+import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
+import com.libertyshield.android.BuildConfig
 import com.libertyshield.android.R
 import com.libertyshield.android.data.repository.EventRepository
 import com.libertyshield.android.engine.MisdirectionEngine
@@ -53,7 +54,7 @@ class SensorMonitorService : Service() {
     @Inject lateinit var misdirectionEngine: MisdirectionEngine
     @Inject lateinit var eventRepository: EventRepository
     @Inject lateinit var appOpsManager: AppOpsManager
-    @Inject lateinit var packageManager: PackageManager
+    // Note: packageManager is inherited from Context — no injection needed
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var pollJob: Job? = null
@@ -96,7 +97,16 @@ class SensorMonitorService : Service() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
-        startForeground(NOTIFICATION_ID, buildNotification())
+        val notification = buildNotification()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(
+                NOTIFICATION_ID, notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE or
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
+            )
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
+        }
         Log.i(TAG, "SensorMonitorService created — starting polling loop")
     }
 
