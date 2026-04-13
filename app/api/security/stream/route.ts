@@ -1,13 +1,19 @@
 /*
  * GET /api/security/stream
- * Server-Sent Events — pushes SystemOverview + last 5 decisions every 2s.
+ * Server-Sent Events — pushes StreamData every 2s.
  * Keep-alive ping every 15s.
  *
  * Auth: x-ls-api-key header OR ?key= query param
  * (EventSource browser API cannot set custom headers, so query param is required)
+ *
+ * Payload shape matches StreamData in useSecurityStream:
+ *   { overview: SecurityOverview, events: SecurityEvent[], topThreats: {key,score}[] }
+ *
+ * Reads liberty:decisions via XREVRANGE (Stream key, not List).
  */
 import { Redis } from '@upstash/redis'
 import { NextRequest } from 'next/server'
+import { xrevrange } from '@/lib/redis'
 
 const kv = new Redis({
   url: process.env.KV_REST_API_URL!,
@@ -15,40 +21,65 @@ const kv = new Redis({
 })
 
 async function buildPayload() {
-  const [lockdownRaw, decisions, allDecisions] = await Promise.all([
+  const [decisions, lockdown] = await Promise.all([
+    xrevrange(kv, 'liberty:decisions', 20),
     kv.get<string>('liberty:control:lockdown'),
-    kv.lrange<string>('liberty:decisions', 0, 4),
-    kv.lrange<string>('liberty:decisions', 0, 19),
   ])
 
-  const lockdown_active = lockdownRaw === '1'
+  const isLocked = lockdown === '1'
 
-  const parsedEvents = decisions
-    .map((d) => {
-      try { return typeof d === 'string' ? JSON.parse(d) : d }
-      catch { return null }
+  const topScore = decisions.reduce(
+    (max, m) => Math.max(max, Number(m.score ?? 0)), 0
+  )
+
+  const status = isLocked ? 'LOCKDOWN' : topScore >= 85 ? 'MIRROR' : 'ACTIVE'
+
+  // Map last 5 decisions to SecurityEvent shape
+  const events = decisions.slice(0, 5).map(m => ({
+    event_id:            m.event_id         ?? '',
+    package_name:        m.device_id        ?? '',
+    sensor:              m.sensor           ?? 'unknown',
+    action:              m.action           ?? 'unknown',
+    risk_score:          Number(m.score     ?? 0),
+    decision:            m.decision         ?? 'ALLOW',
+    misdirection_active: m.misdirection     === 'true',
+    ingested_at:         Number(m.server_ts ?? Date.now()),
+  }))
+
+  // Top threats from per-device score cache (liberty:scores:*)
+  const scoreKeys = await kv.keys('liberty:scores:*')
+  const topThreatsRaw = await Promise.all(
+    scoreKeys.slice(0, 10).map(async (k) => {
+      const raw = await kv.get<string>(k)
+      if (!raw) return null
+      try {
+        const parsed = (typeof raw === 'string' ? JSON.parse(raw) : raw) as {
+          score?: number
+          decision?: string
+        }
+        return {
+          key:   k,                        // full key — dashboard strips prefix
+          score: Number(parsed.score ?? 0),
+        }
+      } catch {
+        return null
+      }
     })
-    .filter(Boolean)
-
-  const topThreatScore = allDecisions.reduce((max, d) => {
-    try {
-      const parsed = typeof d === 'string' ? JSON.parse(d) : d as Record<string, number>
-      return Math.max(max, parsed.risk_score ?? 0)
-    } catch { return max }
-  }, 0)
-
-  const status: 'ACTIVE' | 'MIRROR' | 'LOCKDOWN' =
-    lockdown_active ? 'LOCKDOWN'
-    : topThreatScore >= 70 ? 'MIRROR'
-    : 'ACTIVE'
+  )
+  const topThreats = (topThreatsRaw.filter(Boolean) as { key: string; score: number }[])
+    .sort((a, b) => b.score - a.score)
 
   return {
-    status,
-    layers_active: 7,
-    top_threat_score: topThreatScore,
-    lockdown_active,
-    events: parsedEvents,
-    timestamp_ms: Date.now(),
+    overview: {
+      status,
+      layers_active:    7,
+      top_threat_score: topScore,
+      lockdown_active:  isLocked,
+      events_last_hour: decisions.length,
+      timestamp_ms:     Date.now(),
+    },
+    events,
+    topThreats,
   }
 }
 
@@ -106,9 +137,9 @@ export async function GET(request: NextRequest) {
 
   return new Response(stream, {
     headers: {
-      'Content-Type':  'text/event-stream; charset=utf-8',
-      'Cache-Control': 'no-cache, no-store',
-      'Connection':    'keep-alive',
+      'Content-Type':      'text/event-stream; charset=utf-8',
+      'Cache-Control':     'no-cache, no-store',
+      'Connection':        'keep-alive',
       'X-Accel-Buffering': 'no',
     },
   })

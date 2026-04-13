@@ -1,10 +1,13 @@
 /*
  * GET /api/security/events
- * Returns the last 50 scored decisions from liberty:decisions list.
+ * Returns the last 50 scored decisions from liberty:decisions Stream.
  * Auth: x-ls-api-key header
+ *
+ * Reads via XREVRANGE (Stream key, not List — LRANGE would fail).
  */
 import { Redis } from '@upstash/redis'
 import { NextRequest, NextResponse } from 'next/server'
+import { xrevrange } from '@/lib/redis'
 
 const kv = new Redis({
   url: process.env.KV_REST_API_URL!,
@@ -23,17 +26,18 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const raw = await kv.lrange<string>('liberty:decisions', 0, 49)
+    const messages = await xrevrange(kv, 'liberty:decisions', 50)
 
-    const events = raw
-      .map((item) => {
-        try {
-          return typeof item === 'string' ? JSON.parse(item) : item
-        } catch {
-          return null
-        }
-      })
-      .filter(Boolean)
+    const events = messages.map(m => ({
+      event_id:            m.event_id          ?? '',
+      package_name:        m.device_id         ?? '',
+      sensor:              m.sensor            ?? 'unknown',
+      action:              m.action            ?? 'unknown',
+      risk_score:          Number(m.score      ?? 0),
+      decision:            m.decision          ?? 'ALLOW',
+      misdirection_active: m.misdirection      === 'true',
+      ingested_at:         Number(m.server_ts  ?? Date.now()),
+    }))
 
     return NextResponse.json({ events })
   } catch (err) {
