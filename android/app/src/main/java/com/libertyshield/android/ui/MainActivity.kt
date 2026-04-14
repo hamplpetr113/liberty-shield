@@ -332,7 +332,10 @@ private fun LibertyShieldApp() {
         bottomBar = {
             NavigationBar(
                 containerColor = ShieldSurface,
-                tonalElevation = androidx.compose.ui.unit.Dp.Unspecified
+                // 0.dp = no tonal overlay. We supply containerColor explicitly so
+                // Material3's surfaceColorAtElevation() must not run — passing
+                // Dp.Unspecified (= Dp(Float.NaN)) caused alpha = NaN crash.
+                tonalElevation = 0.dp
             ) {
                 val navBackStackEntry by navController.currentBackStackEntryAsState()
                 val currentDestination = navBackStackEntry?.destination
