@@ -2,21 +2,25 @@
  * Threat model: Core protection layer.
  * This service runs permanently in the foreground.
  *
- * Detection method:
- *   - Polls AppOpsManager.checkOpNoThrow() for ALL installed packages every POLL_MS
- *   - Public API — works on all supported API levels (26+)
- *   - Returns MODE_ALLOWED when the system has granted the op to that package
+ * Detection method (PASSIVE):
+ *   API 29+: AppOpsManager.isOperationActive() — returns true ONLY when the hardware
+ *            is actively in use by that package right now. Real-time signal.
+ *   API 26-28: AppOpsManager.checkOpNoThrow() — reflects permission grant state,
+ *              not live hardware use. Higher false-positive rate on older devices.
+ *
+ * Monitoring is intentionally passive:
+ *   - The service does NOT open microphone or camera hardware.
+ *   - Misdirection (AudioTrack white noise / torch) is disabled by default.
+ *     It caused an audible hiss when any app launched with Shield ON because
+ *     checkOpNoThrow() returned MODE_ALLOWED for all apps with the permission
+ *     (not just ones actively recording), creating constant false positives.
+ *   - Foreground service type is DATA_SYNC — no microphone/camera privacy indicator.
  *
  * Risks:
  *   - Polling battery impact → mitigated by 2s interval + doze awareness
  *   - Missing detection window → acceptable with 2s poll
- *   - Service killed by system → START_STICKY auto-restart + WorkManager 15-min heartbeat
- *   - Service killed by OEM battery saver → user guided to exclude from battery optimisation
- *
- * Android 14 (API 34) note:
- *   startForeground() with FOREGROUND_SERVICE_TYPE_MICROPHONE / CAMERA throws SecurityException
- *   if the corresponding runtime permission is not granted at call time.
- *   startForegroundSafely() guards against this in ALL entry paths.
+ *   - Service killed by system → START_STICKY + WorkManager 15-min heartbeat
+ *   - Service killed by OEM battery saver → user guided to exclude from battery opt
  */
 package com.libertyshield.android.service
 
@@ -156,8 +160,11 @@ class SensorMonitorService : Service() {
 
     override fun onDestroy() {
         Log.i(TAG, "SensorMonitorService destroyed (stoppedByUser=$stoppedByUser)")
-        try { misdirectionEngine.stopMicrophoneMisdirection() } catch (e: Exception) { Log.w(TAG, "Stop mic misdirection error: ${e.message}") }
-        try { misdirectionEngine.stopCameraMisdirection(this) } catch (e: Exception) { Log.w(TAG, "Stop cam misdirection error: ${e.message}") }
+        // Defensively stop misdirection in case it was manually activated from outside
+        // this service (e.g., a future Settings toggle). Both calls are no-ops when
+        // misdirection is not active — they check isMicMisdirectionActive first.
+        try { misdirectionEngine.stopMicrophoneMisdirection() } catch (e: Exception) { Log.w(TAG, "Stop mic misdirection: ${e.message}") }
+        try { misdirectionEngine.stopCameraMisdirection(this) } catch (e: Exception) { Log.w(TAG, "Stop cam misdirection: ${e.message}") }
 
         CoroutineScope(Dispatchers.IO).launch {
             try {
@@ -178,61 +185,64 @@ class SensorMonitorService : Service() {
     // ===== FOREGROUND START (Android 14 safe) =====
 
     /**
-     * Calls startForeground() with only the foreground service types for which
-     * the corresponding runtime permissions are currently granted.
+     * Starts the foreground service in PASSIVE monitoring mode.
      *
-     * On Android 14 (targetSdk 34), requesting a service type whose runtime permission
-     * is not granted throws SecurityException. This method guards all entry paths:
-     * - Direct user start from HomeScreen
-     * - BootReceiver restart on reboot
-     * - After Android auto-revokes unused-app permissions (90-day policy)
+     * Detection is via AppOpsManager.isOperationActive() — we never open the
+     * microphone or camera hardware ourselves. Therefore we must NOT request
+     * FOREGROUND_SERVICE_TYPE_MICROPHONE or FOREGROUND_SERVICE_TYPE_CAMERA:
+     *
+     *   1. Requesting those types shows the microphone/camera privacy indicator
+     *      in the status bar, misleading the user into thinking we are recording.
+     *   2. On some devices, requesting the audio service type causes an audio-path
+     *      hardware initialisation side-effect (audible hiss/click).
+     *   3. Those types are only required when the service itself opens the hardware.
+     *
+     * We use FOREGROUND_SERVICE_TYPE_DATA_SYNC on API 34+ (a type declaration is
+     * mandatory) and the no-type overload on API 29–33. On API 26–28, any
+     * startForeground() call works.
      */
     private fun startForegroundSafely(notification: Notification) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            val hasMic = ContextCompat.checkSelfPermission(
-                this, Manifest.permission.RECORD_AUDIO
-            ) == PackageManager.PERMISSION_GRANTED
+        val hasMic = ContextCompat.checkSelfPermission(
+            this, Manifest.permission.RECORD_AUDIO
+        ) == PackageManager.PERMISSION_GRANTED
+        val hasCam = ContextCompat.checkSelfPermission(
+            this, Manifest.permission.CAMERA
+        ) == PackageManager.PERMISSION_GRANTED
 
-            val hasCam = ContextCompat.checkSelfPermission(
-                this, Manifest.permission.CAMERA
-            ) == PackageManager.PERMISSION_GRANTED
+        Log.i(TAG, "startForegroundSafely: passive/dataSync mode  hasMic=$hasMic  hasCam=$hasCam  API=${Build.VERSION.SDK_INT}")
 
-            var fgType = 0
-            if (hasMic) fgType = fgType or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
-            if (hasCam) fgType = fgType or ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
-
-            Log.d(TAG, "startForegroundSafely: hasMic=$hasMic hasCam=$hasCam fgType=$fgType")
-
-            try {
-                if (fgType != 0) {
-                    startForeground(NOTIFICATION_ID, notification, fgType)
-                } else {
-                    // No sensor permissions yet — run as generic foreground service.
-                    // Log a PERMISSION_MISSING system event for Debug screen visibility.
-                    startForeground(NOTIFICATION_ID, notification)
-                    Log.w(TAG, "Started without sensor service types — permissions not yet granted. Detection is limited.")
-                    serviceScope.launch(Dispatchers.IO) {
-                        try {
-                            eventRepository.logSystemEvent(
-                                action    = EventAction.PERMISSION_MISSING,
-                                label     = "mic=$hasMic cam=$hasCam",
-                                riskScore = 0
-                            )
-                        } catch (e: Exception) { /* non-fatal */ }
-                    }
-                }
-            } catch (e: SecurityException) {
-                // Belt-and-suspenders fallback — should not normally reach here since
-                // we check permissions above, but handles race conditions on some OEMs.
-                Log.e(TAG, "startForeground SecurityException (unexpected): ${e.message}", e)
+        if (!hasMic || !hasCam) {
+            Log.w(TAG, "One or more permissions missing — detection may be limited  hasMic=$hasMic  hasCam=$hasCam")
+            serviceScope.launch(Dispatchers.IO) {
                 try {
-                    startForeground(NOTIFICATION_ID, notification)
-                } catch (e2: Exception) {
-                    Log.e(TAG, "startForeground fallback also failed: ${e2.message}")
-                }
+                    eventRepository.logSystemEvent(
+                        action    = EventAction.PERMISSION_MISSING,
+                        label     = "mic=$hasMic cam=$hasCam",
+                        riskScore = 0
+                    )
+                } catch (e: Exception) { /* non-fatal */ }
             }
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
+        }
+
+        try {
+            if (Build.VERSION.SDK_INT >= 34) {
+                // API 34 (Android 14)+: a foreground service type is mandatory.
+                // DATA_SYNC is correct for a background monitoring/upload service
+                // that does not open camera or microphone hardware.
+                startForeground(
+                    NOTIFICATION_ID, notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                )
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "startForeground failed: ${e.message}", e)
+            // Last-resort fallback — try without type on any unexpected failure.
+            try { startForeground(NOTIFICATION_ID, notification) }
+            catch (e2: Exception) {
+                Log.e(TAG, "startForeground fallback also failed: ${e2.message}")
+            }
         }
     }
 
@@ -315,30 +325,23 @@ class SensorMonitorService : Service() {
         Log.w(TAG, "Sensor START: $packageName / $sensor / risk=$riskScore / bg=$isBackground")
 
         if (riskScore > RISK_THRESHOLD) {
-            when (sensor) {
-                SensorType.MICROPHONE -> {
-                    if (!misdirectionEngine.isMicMisdirectionActive) {
-                        misdirectionEngine.startMicrophoneMisdirection()
-                        Log.i(TAG, "Mic misdirection ACTIVATED for $packageName")
-                    }
-                }
-                SensorType.CAMERA -> {
-                    if (!misdirectionEngine.isCamMisdirectionActive) {
-                        misdirectionEngine.startCameraMisdirection(this)
-                        Log.i(TAG, "Cam misdirection ACTIVATED for $packageName")
-                    }
-                }
-                SensorType.SYSTEM -> { }
-            }
+            // PASSIVE MONITORING ONLY — misdirection (AudioTrack white noise / torch) is
+            // intentionally disabled here.
+            //
+            // Why: Misdirection played audio through the device speaker every time any app
+            // with RECORD_AUDIO permission transitioned to background, causing an audible
+            // hiss. Even with the detection API now fixed (isOperationActive instead of
+            // checkOpNoThrow), auto-triggering the speaker on real detections would:
+            //   1. Produce audible noise that reveals our presence to the attacker
+            //   2. Drain battery (continuous AudioTrack streaming)
+            //   3. Interfere with legitimate media playback
+            //
+            // Detection is logged and stored. Enable misdirection explicitly via Settings
+            // when implementing a user-controlled opt-in toggle.
+            Log.w(TAG, "HIGH RISK — passive detection only: $packageName / $sensor risk=$riskScore (misdirection disabled)")
         }
 
         lastDetectionTime[packageName] = now
-
-        val misdirectionNowActive = when (sensor) {
-            SensorType.MICROPHONE -> misdirectionEngine.isMicMisdirectionActive
-            SensorType.CAMERA     -> misdirectionEngine.isCamMisdirectionActive
-            SensorType.SYSTEM     -> false
-        }
 
         serviceScope.launch(Dispatchers.IO) {
             try {
@@ -348,7 +351,7 @@ class SensorMonitorService : Service() {
                     sensor             = sensor,
                     action             = EventAction.SENSOR_START,
                     riskScore          = riskScore,
-                    misdirectionActive = misdirectionNowActive
+                    misdirectionActive = false   // misdirection not auto-activated
                 )
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to log SENSOR_START event for $packageName: ${e.message}")
@@ -359,21 +362,11 @@ class SensorMonitorService : Service() {
     private fun handleSensorStop(packageName: String, sensor: SensorType) {
         Log.d(TAG, "Sensor STOP: $packageName / $sensor")
 
-        val otherActiveForSensor = activeOps.any { key ->
-            key.endsWith(":${sensor.name}") && !key.startsWith("$packageName:")
-        }
-
-        if (!otherActiveForSensor) {
-            try {
-                when (sensor) {
-                    SensorType.MICROPHONE -> misdirectionEngine.stopMicrophoneMisdirection()
-                    SensorType.CAMERA     -> misdirectionEngine.stopCameraMisdirection(this)
-                    SensorType.SYSTEM     -> { }
-                }
-            } catch (e: Exception) {
-                Log.w(TAG, "Error stopping misdirection for $sensor: ${e.message}")
-            }
-        }
+        // No misdirection to stop — misdirection auto-activation is disabled.
+        // If misdirection is ever re-enabled via a user toggle, stop calls
+        // belong here:
+        //   misdirectionEngine.stopMicrophoneMisdirection()
+        //   misdirectionEngine.stopCameraMisdirection(this)
 
         serviceScope.launch(Dispatchers.IO) {
             try {

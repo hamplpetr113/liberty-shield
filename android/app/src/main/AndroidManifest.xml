@@ -10,10 +10,13 @@
 
     <!-- ===== PERMISSIONS ===== -->
 
-    <!-- Sensor monitoring — foreground service types -->
+    <!-- Foreground service — passive monitoring via AppOpsManager, no hardware access -->
+    <!-- DATA_SYNC is the correct type: we poll sensor state and sync events to server. -->
+    <!-- MICROPHONE and CAMERA types are intentionally absent: the service never opens  -->
+    <!-- audio/camera hardware, so declaring those types would show misleading privacy  -->
+    <!-- indicators in the status bar and risk audio-path side effects.                -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
 
     <!-- Boot persistence -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
@@ -80,12 +83,14 @@
         <!--
             Threat model: Service isolation.
             exported=false prevents external apps from binding/starting this service.
-            foregroundServiceType restricts what hardware this service can access.
+            foregroundServiceType="dataSync" — passive AppOpsManager polling + event upload.
+            microphone|camera types are intentionally absent (see FOREGROUND_SERVICE
+            permission comment above). The service never opens audio/camera hardware.
         -->
         <service
             android:name=".service.SensorMonitorService"
             android:exported="false"
-            android:foregroundServiceType="microphone|camera"
+            android:foregroundServiceType="dataSync"
             android:stopWithTask="false" />
 
         <!-- ===== BOOT RECEIVER ===== -->

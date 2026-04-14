@@ -94,20 +94,34 @@ class SensorDetector @Inject constructor(
     }
 
     /**
-     * Checks whether an AppOps operation is currently permitted (MODE_ALLOWED) for a package.
+     * Returns true ONLY when [packageName] is actively accessing the hardware right now.
      *
-     * Uses the public AppOpsManager.checkOpNoThrow() API, which is available on all
-     * supported API levels (26+). Returns true when the op mode is MODE_ALLOWED,
-     * meaning the system has granted the operation to that package.
+     * API 29+ (Android 10): AppOpsManager.isOperationActive() — returns true only when the
+     * hardware is currently open by that package. This is the correct real-time signal.
      *
-     * Note: checkOpNoThrow reflects the current grant state, not a real-time
-     * hardware-active signal. Combined with the 2s polling loop in
-     * SensorMonitorService, this provides acceptable detection latency.
+     * API 26-28 fallback: checkOpNoThrow() reflects the permission grant state, not
+     * hardware use. False positives are expected on older devices — this was the root
+     * cause of the audible hiss on API 29+ devices:
+     *   checkOpNoThrow returns MODE_ALLOWED for ANY app with RECORD_AUDIO permission,
+     *   not just apps currently recording. Every background app with that permission
+     *   appeared as "active", triggering the misdirection engine (AudioTrack white noise)
+     *   every time an app was opened or closed → audible hiss.
      */
     private fun isOpCurrentlyActive(packageName: String, uid: Int, opStr: String): Boolean {
         return try {
-            val mode = appOpsManager.checkOpNoThrow(opStr, uid, packageName)
-            mode == AppOpsManager.MODE_ALLOWED
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                // API 29+: real-time hardware-active check.
+                val opCode = AppOpsManager.strOpToOp(opStr)
+                val active = appOpsManager.isOperationActive(opCode, uid, packageName)
+                if (active) {
+                    Log.i(TAG, "ACTIVE hardware use detected: $packageName / $opStr")
+                }
+                active
+            } else {
+                // API 26-28: permission-grant check only — higher false positive rate.
+                val mode = appOpsManager.checkOpNoThrow(opStr, uid, packageName)
+                mode == AppOpsManager.MODE_ALLOWED
+            }
         } catch (e: SecurityException) {
             Log.v(TAG, "SecurityException for $packageName / $opStr: ${e.message}")
             false
