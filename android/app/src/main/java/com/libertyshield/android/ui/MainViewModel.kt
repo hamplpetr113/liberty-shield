@@ -9,6 +9,7 @@
 package com.libertyshield.android.ui
 
 import android.content.Context
+import android.util.Log
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -240,6 +241,25 @@ class MainViewModel @Inject constructor(
 
     fun setFilter(filter: EventFilter) {
         _activeFilter.value = filter
+    }
+
+    /**
+     * Logs an APP_LAUNCH system event.
+     * Call once from MainActivity.onCreate() to populate the event pipeline.
+     * Safe to call in degraded-DB mode — any insert failure is caught and logged.
+     */
+    fun logAppLaunch() {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                eventRepository.logSystemEvent(
+                    action    = EventAction.APP_LAUNCH,
+                    label     = "Liberty Shield",
+                    riskScore = 0
+                )
+            } catch (e: Exception) {
+                Log.w(TAG, "Could not log APP_LAUNCH: ${e.message}")
+            }
+        }
     }
 
     /**

@@ -80,6 +80,17 @@ class SyncWorker @AssistedInject constructor(
 
         val authHeader = "Bearer $apiKey"
 
+        // Log sync_started event so the event pipeline and Debug screen reflect the attempt.
+        try {
+            eventRepository.logSystemEvent(
+                action    = EventAction.SYNC_STARTED,
+                label     = "SyncWorker",
+                riskScore = 0
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not log SYNC_STARTED: ${e.message}")
+        }
+
         return try {
             val unsyncedEvents = eventRepository.getUnsyncedEvents()
 

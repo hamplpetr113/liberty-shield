@@ -126,6 +126,10 @@ class MainActivity : ComponentActivity() {
 
             checkAndRequestPermissions()
 
+            // Log app launch event into the event pipeline.
+            // Fails gracefully if DB is unavailable on this launch.
+            viewModel.logAppLaunch()
+
             // Read any previous crash BEFORE rendering so SafeFallbackScreen can show it
             // without needing a ViewModel or DB.
             val previousCrash = CrashLogger.getLastCrash(this)

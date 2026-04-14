@@ -33,7 +33,11 @@ object EventAction {
     const val BATTERY_OPT_ACTIVE    = "battery_opt_active"
     const val USAGE_ACCESS_MISSING  = "usage_access_missing"
 
+    // ── App lifecycle ──────────────────────────────────────────────────────────
+    const val APP_LAUNCH = "app_launch"
+
     // ── Sync outcome events ────────────────────────────────────────────────────
+    const val SYNC_STARTED = "sync_started"
     const val SYNC_SUCCESS = "sync_success"
     const val SYNC_FAILED  = "sync_failed"
 }
@@ -50,6 +54,8 @@ fun String.toEventActionLabel(): String = when (this) {
     EventAction.PERMISSION_MISSING    -> "Permission Missing"
     EventAction.BATTERY_OPT_ACTIVE    -> "Battery Opt Active"
     EventAction.USAGE_ACCESS_MISSING  -> "Usage Access Missing"
+    EventAction.APP_LAUNCH             -> "App Launch"
+    EventAction.SYNC_STARTED          -> "Sync Started"
     EventAction.SYNC_SUCCESS          -> "Sync Success"
     EventAction.SYNC_FAILED           -> "Sync Failed"
     else                              -> this
