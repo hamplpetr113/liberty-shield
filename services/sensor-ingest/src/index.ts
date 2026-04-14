@@ -17,11 +17,15 @@ import Redis from 'ioredis'
 import { createHash, randomUUID } from 'crypto'
 
 // ── Redis ─────────────────────────────────────────────────────────
+// lazyConnect: true — defer TCP connect until first command.
+// With lazyConnect: false the connection attempt fires synchronously on module
+// load, before the 'error' handler below is attached, causing an uncaught
+// ECONNREFUSED that kills the process before Express even starts.
 const redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379', {
   maxRetriesPerRequest: 3,
   retryStrategy: (times) => Math.min(times * 200, 5000),
   enableReadyCheck: false,   // Upstash doesn't support PING on connect
-  lazyConnect: false,
+  lazyConnect: true,
 })
 
 redis.on('error', (err) => console.error('[redis] error:', err.message))
@@ -289,11 +293,41 @@ app.post('/api/sensors/event', requireAuth, async (req: Request, res: Response) 
   }
 })
 
-// ── Start ─────────────────────────────────────────────────────────
-const PORT = parseInt(process.env.PORT || process.env.SENSOR_INGEST_PORT || '3001', 10)
-app.listen(PORT, () => {
-  console.log(`[sensor-ingest] listening on :${PORT}`)
-  console.log(`[sensor-ingest] Redis: ${process.env.REDIS_URL ? 'configured' : 'localhost fallback'}`)
+// ── Process-level safety net ──────────────────────────────────────
+// Catches anything that escapes a try/catch — e.g. ioredis protocol errors,
+// synchronous module-load failures, or unresolved promise rejections.
+process.on('uncaughtException', (err) => {
+  console.error('[sensor-ingest] UNCAUGHT EXCEPTION — process will exit')
+  console.error(err)
+  process.exit(1)
 })
+
+process.on('unhandledRejection', (reason) => {
+  console.error('[sensor-ingest] UNHANDLED REJECTION — process will exit')
+  console.error(reason)
+  process.exit(1)
+})
+
+// ── Start ─────────────────────────────────────────────────────────
+console.log('[sensor-ingest] Starting Liberty Shield sensor ingest server...')
+console.log(`[sensor-ingest] PORT: ${process.env.PORT ?? '(not set, defaulting)'}`)
+console.log(`[sensor-ingest] Redis: ${process.env.REDIS_URL ? 'configured via REDIS_URL' : 'localhost fallback'}`)
+console.log(`[sensor-ingest] Auth: ${process.env.SENSOR_API_KEY ? 'SENSOR_API_KEY set' : 'WARNING — SENSOR_API_KEY not set'}`)
+
+const PORT = parseInt(process.env.PORT || process.env.SENSOR_INGEST_PORT || '3001', 10)
+
+try {
+  const server = app.listen(PORT, () => {
+    console.log(`[sensor-ingest] listening on :${PORT}`)
+  })
+
+  server.on('error', (err) => {
+    console.error(`[sensor-ingest] server error — could not bind to port ${PORT}:`, err.message)
+    process.exit(1)
+  })
+} catch (err) {
+  console.error('[sensor-ingest] Fatal error starting server:', (err as Error).message)
+  process.exit(1)
+}
 
 export default app
