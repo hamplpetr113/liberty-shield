@@ -5,6 +5,19 @@
  * Risk: False positives from system ops → whitelist + risk scoring
  * Risk: AppOpsManager API changes → version-gated implementation
  * Risk: Package enumeration performance → cached package list, refresh every 60s
+ *
+ * Detection strategy (all API levels):
+ *   AppOpsManager.checkOpNoThrow(String, int, String) is a public API since API 19.
+ *   It returns MODE_ALLOWED when an app holds the permission (RECORD_AUDIO / CAMERA).
+ *   This is a permission-grant check, not a real-time hardware-active check, so false
+ *   positives are expected: apps that have the permission but are not currently recording
+ *   will appear as "active". The risk-scoring layer in SensorMonitorService is responsible
+ *   for further filtering (background flag, whitelist, threshold gating).
+ *
+ *   Note: AppOpsManager.isOperationActive() and strOpToOp() would give true real-time
+ *   hardware detection on API 29+, but both are @hide and absent from the public SDK
+ *   stubs (compileSdk 34). They cannot be used in production app code compiled against
+ *   the standard Android SDK, even via reflection in strict hiddenapi-policy environments.
  */
 package com.libertyshield.android.engine
 
@@ -58,7 +71,7 @@ class SensorDetector @Inject constructor(
 
         for (pkg in packages) {
             try {
-                if (isOpCurrentlyActive(pkg.packageName, pkg.uid, AppOpsManager.OPSTR_RECORD_AUDIO)) {
+                if (isOpPermitted(pkg.packageName, pkg.uid, AppOpsManager.OPSTR_RECORD_AUDIO)) {
                     result.add(
                         DetectedAccess(
                             packageName = pkg.packageName,
@@ -74,7 +87,7 @@ class SensorDetector @Inject constructor(
             }
 
             try {
-                if (isOpCurrentlyActive(pkg.packageName, pkg.uid, AppOpsManager.OPSTR_CAMERA)) {
+                if (isOpPermitted(pkg.packageName, pkg.uid, AppOpsManager.OPSTR_CAMERA)) {
                     result.add(
                         DetectedAccess(
                             packageName = pkg.packageName,
@@ -94,56 +107,30 @@ class SensorDetector @Inject constructor(
     }
 
     /**
-     * Returns true ONLY when [packageName] is actively accessing the hardware right now.
+     * Returns true when [packageName] holds the AppOps permission for [opStr].
      *
-     * API 29+ (Android 10): AppOpsManager.isOperationActive() — returns true only when the
-     * hardware is currently open by that package. This is the correct real-time signal.
+     * Uses [AppOpsManager.checkOpNoThrow] which is a public API since API 19. It returns
+     * [AppOpsManager.MODE_ALLOWED] when the app has been granted the operation.
      *
-     * API 26-28 fallback: checkOpNoThrow() reflects the permission grant state, not
-     * hardware use. False positives are expected on older devices — this was the root
-     * cause of the audible hiss on API 29+ devices:
-     *   checkOpNoThrow returns MODE_ALLOWED for ANY app with RECORD_AUDIO permission,
-     *   not just apps currently recording. Every background app with that permission
-     *   appeared as "active", triggering the misdirection engine (AudioTrack white noise)
-     *   every time an app was opened or closed → audible hiss.
+     * Important: this is a permission-grant check, not a real-time hardware-active check.
+     * An app that holds RECORD_AUDIO permission but is not currently recording will still
+     * return true. False positives are expected and must be handled by the caller (e.g.
+     * via the background flag, risk threshold, or whitelist in SensorMonitorService).
+     *
+     * The hidden APIs AppOpsManager.strOpToOp() and AppOpsManager.isOperationActive()
+     * that would enable real-time hardware detection are @hide and excluded from the
+     * public Android SDK stubs. They cannot be called directly or reliably via reflection
+     * when hiddenapi-policy is strict. checkOpNoThrow() is the correct public-SDK
+     * alternative.
      */
-    private fun isOpCurrentlyActive(packageName: String, uid: Int, opStr: String): Boolean {
+    private fun isOpPermitted(packageName: String, uid: Int, opStr: String): Boolean {
         return try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                // AppOpsManager.strOpToOp() and AppOpsManager.isOperationActive() are both
-                // annotated @hide in AOSP and are absent from the public SDK stubs (compileSdk 34).
-                // Direct calls compile on AOSP builds but fail against the standard SDK with
-                // "Unresolved reference". Reflection resolves them at runtime on API 29+ devices
-                // while avoiding any compile-time dependency on the hidden surface.
-                // Fallback: checkOpNoThrow() — reflects permission grant state, not active hardware
-                // use, so false positives are expected. This matches the pre-API-29 behaviour.
-                try {
-                    val strOpToOp = AppOpsManager::class.java.getMethod(
-                        "strOpToOp", String::class.java
-                    )
-                    val opCode = strOpToOp.invoke(null, opStr) as Int
-
-                    val isOperationActive = AppOpsManager::class.java.getMethod(
-                        "isOperationActive",
-                        Int::class.javaPrimitiveType,
-                        Int::class.javaPrimitiveType,
-                        String::class.java
-                    )
-                    val active = isOperationActive.invoke(appOpsManager, opCode, uid, packageName) as Boolean
-                    if (active) {
-                        Log.i(TAG, "ACTIVE hardware use detected: $packageName / $opStr")
-                    }
-                    active
-                } catch (reflectEx: Exception) {
-                    // Hidden API blocked (e.g. strict hiddenapi-policy) — fall back to grant check.
-                    Log.v(TAG, "isOperationActive reflection failed ($opStr): ${reflectEx.message}")
-                    appOpsManager.checkOpNoThrow(opStr, uid, packageName) == AppOpsManager.MODE_ALLOWED
-                }
-            } else {
-                // API 26-28: permission-grant check only — higher false positive rate.
-                val mode = appOpsManager.checkOpNoThrow(opStr, uid, packageName)
-                mode == AppOpsManager.MODE_ALLOWED
+            val mode = appOpsManager.checkOpNoThrow(opStr, uid, packageName)
+            val permitted = mode == AppOpsManager.MODE_ALLOWED
+            if (permitted) {
+                Log.v(TAG, "Op permitted: $packageName / $opStr")
             }
+            permitted
         } catch (e: SecurityException) {
             Log.v(TAG, "SecurityException for $packageName / $opStr: ${e.message}")
             false
@@ -165,14 +152,6 @@ class SensorDetector @Inject constructor(
             process.importance > ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND
         } catch (e: Exception) {
             true // assume background if we can't determine
-        }
-    }
-
-    private fun getUid(packageName: String): Int? {
-        return try {
-            packageManager.getApplicationInfo(packageName, 0).uid
-        } catch (e: PackageManager.NameNotFoundException) {
-            null
         }
     }
 
