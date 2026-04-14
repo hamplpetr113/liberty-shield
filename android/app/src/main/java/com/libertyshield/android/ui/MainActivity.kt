@@ -121,8 +121,9 @@ class MainActivity : ComponentActivity() {
                 }
             }
         } catch (e: Throwable) {
-            android.util.Log.e("LibertyShield", "CRASH in MainActivity.onCreate: ${e.message}", e)
-            throw e
+            // Log but do NOT rethrow — a crash here kills the process before any UI is shown.
+            // The app will render in a degraded state; the Debug tab will show what failed.
+            android.util.Log.e("LibertyShield", "Error in MainActivity.onCreate — continuing in degraded mode: ${e.message}", e)
         }
     }
 

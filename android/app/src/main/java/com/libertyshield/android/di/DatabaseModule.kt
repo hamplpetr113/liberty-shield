@@ -97,8 +97,24 @@ object DatabaseModule {
                 }
                 createDatabase(context, allowRetry = false)  // one retry, no further recursion
             } else {
-                Log.e(TAG, "Database recovery failed — rethrowing")
-                throw e
+                // Both the initial open and the recovery attempt failed.
+                // Fall back to an in-memory (unencrypted) database so the app can still
+                // launch and show diagnostics. Events will not persist across restarts,
+                // but the app will not crash on cold launch.
+                Log.e(TAG, "Database recovery failed — falling back to in-memory database. Events will not be persisted.")
+                try {
+                    Room.inMemoryDatabaseBuilder(
+                        context.applicationContext,
+                        AppDatabase::class.java
+                    )
+                        .fallbackToDestructiveMigration()
+                        .build()
+                } catch (fallbackEx: Throwable) {
+                    // Truly unrecoverable — even an in-memory Room failed.
+                    // Rethrow so the crash is visible in the logs with the original cause.
+                    Log.e(TAG, "In-memory fallback also failed: ${fallbackEx.message}", fallbackEx)
+                    throw e
+                }
             }
         } finally {
             passphrase.fill(0)

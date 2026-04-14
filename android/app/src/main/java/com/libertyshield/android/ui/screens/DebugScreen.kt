@@ -58,15 +58,17 @@ import java.util.Locale
 fun DebugScreen(
     viewModel: MainViewModel = hiltViewModel()
 ) {
-    val shieldActive    by viewModel.shieldActive.collectAsState()
-    val permissionState by viewModel.permissionState.collectAsState()
-    val recentEvents    by viewModel.recentEvents.collectAsState()
-    val eventCount      by viewModel.eventCount.collectAsState()
-    val unsyncedCount   by viewModel.unsyncedCount.collectAsState()
-    val eventsPerHour   by viewModel.eventsPerHour.collectAsState()
-    val lastSyncTime    by viewModel.lastSyncTime.collectAsState()
-    val lastSyncSuccess by viewModel.lastSyncSuccess.collectAsState()
-    val lastSyncCount   by viewModel.lastSyncCount.collectAsState()
+    val shieldActive      by viewModel.shieldActive.collectAsState()
+    val permissionState   by viewModel.permissionState.collectAsState()
+    val recentEvents      by viewModel.recentEvents.collectAsState()
+    val eventCount        by viewModel.eventCount.collectAsState()
+    val unsyncedCount     by viewModel.unsyncedCount.collectAsState()
+    val eventsPerHour     by viewModel.eventsPerHour.collectAsState()
+    val lastSyncTime      by viewModel.lastSyncTime.collectAsState()
+    val lastSyncSuccess   by viewModel.lastSyncSuccess.collectAsState()
+    val lastSyncCount     by viewModel.lastSyncCount.collectAsState()
+    val databaseAvailable by viewModel.databaseAvailable.collectAsState()
+    val startupError      by viewModel.startupError.collectAsState()
 
     LazyColumn(
         modifier = Modifier
@@ -92,6 +94,40 @@ fun DebugScreen(
                     style = MaterialTheme.typography.titleLarge,
                     color = ShieldTextPrimary
                 )
+            }
+        }
+
+        // ===== STARTUP DIAGNOSTICS =====
+        if (!databaseAvailable || startupError != null) {
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = RiskHigh.copy(alpha = 0.12f)),
+                    shape = RoundedCornerShape(12.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, RiskHigh)
+                ) {
+                    Column(modifier = Modifier.padding(14.dp)) {
+                        Text(
+                            text = "Startup Diagnostics",
+                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                            color = RiskHigh
+                        )
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), color = RiskHigh.copy(alpha = 0.3f))
+                        DebugRow("Database", if (databaseAvailable) "OK" else "UNAVAILABLE (in-memory fallback)",
+                            valueColor = if (databaseAvailable) ShieldGreen else RiskHigh)
+                        if (startupError != null) {
+                            DebugRow("Error", startupError ?: "", valueColor = RiskHigh)
+                        }
+                        if (!databaseAvailable) {
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                text = "Events are not persisted. Reinstall the app or clear app data if this persists.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = RiskMedium
+                            )
+                        }
+                    }
+                }
             }
         }
 
