@@ -110,13 +110,35 @@ class SensorDetector @Inject constructor(
     private fun isOpCurrentlyActive(packageName: String, uid: Int, opStr: String): Boolean {
         return try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                // API 29+: real-time hardware-active check.
-                val opCode = AppOpsManager.strOpToOp(opStr)
-                val active = appOpsManager.isOperationActive(opCode, uid, packageName)
-                if (active) {
-                    Log.i(TAG, "ACTIVE hardware use detected: $packageName / $opStr")
+                // AppOpsManager.strOpToOp() and AppOpsManager.isOperationActive() are both
+                // annotated @hide in AOSP and are absent from the public SDK stubs (compileSdk 34).
+                // Direct calls compile on AOSP builds but fail against the standard SDK with
+                // "Unresolved reference". Reflection resolves them at runtime on API 29+ devices
+                // while avoiding any compile-time dependency on the hidden surface.
+                // Fallback: checkOpNoThrow() — reflects permission grant state, not active hardware
+                // use, so false positives are expected. This matches the pre-API-29 behaviour.
+                try {
+                    val strOpToOp = AppOpsManager::class.java.getMethod(
+                        "strOpToOp", String::class.java
+                    )
+                    val opCode = strOpToOp.invoke(null, opStr) as Int
+
+                    val isOperationActive = AppOpsManager::class.java.getMethod(
+                        "isOperationActive",
+                        Int::class.javaPrimitiveType,
+                        Int::class.javaPrimitiveType,
+                        String::class.java
+                    )
+                    val active = isOperationActive.invoke(appOpsManager, opCode, uid, packageName) as Boolean
+                    if (active) {
+                        Log.i(TAG, "ACTIVE hardware use detected: $packageName / $opStr")
+                    }
+                    active
+                } catch (reflectEx: Exception) {
+                    // Hidden API blocked (e.g. strict hiddenapi-policy) — fall back to grant check.
+                    Log.v(TAG, "isOperationActive reflection failed ($opStr): ${reflectEx.message}")
+                    appOpsManager.checkOpNoThrow(opStr, uid, packageName) == AppOpsManager.MODE_ALLOWED
                 }
-                active
             } else {
                 // API 26-28: permission-grant check only — higher false positive rate.
                 val mode = appOpsManager.checkOpNoThrow(opStr, uid, packageName)
