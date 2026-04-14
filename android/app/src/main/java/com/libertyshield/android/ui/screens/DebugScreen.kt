@@ -110,7 +110,19 @@ fun DebugScreen(
             DebugCard(title = "Device & Config") {
                 DebugRow("Device ID", viewModel.deviceId)
                 DebugRow("API base URL", viewModel.apiBaseUrl)
-                DebugRow("API key set", viewModel.hasSensorApiKey.toString())
+                DebugRow(
+                    "API key set",
+                    if (viewModel.hasSensorApiKey) "YES" else "NO — sync will fail",
+                    valueColor = if (viewModel.hasSensorApiKey) ShieldGreen else ShieldRed
+                )
+                if (!viewModel.hasSensorApiKey) {
+                    androidx.compose.material3.Text(
+                        text = "Set SENSOR_API_KEY in Settings → Server API Key, or in local.properties for CI builds.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = RiskMedium,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                }
             }
         }
 

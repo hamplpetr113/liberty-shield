@@ -6,9 +6,14 @@
  * Risk: BOOT_COMPLETED can be spoofed by malicious apps.
  * Mitigation: We only start our own service; no external data consumed.
  *
+ * Risk: Starting service on boot when runtime permissions were revoked
+ *       (auto-revoke after 90 days, or user revoke between reboots).
+ * Mitigation: startForegroundSafely() in SensorMonitorService handles missing permissions
+ *   gracefully (starts as basic foreground service without sensor types). We still start
+ *   the service so it can log the PERMISSION_MISSING event and remain visible in the UI.
+ *
  * Risk: Starting service before user unlocks screen (LOCKED_BOOT_COMPLETED).
- * Mitigation: startForegroundService() works before first unlock; service itself
- * handles crypto init gracefully in LibertyShieldApp.onCreate() which runs first.
+ * Mitigation: startForegroundService() works before first unlock.
  */
 package com.libertyshield.android.service
 
@@ -43,19 +48,21 @@ class BootReceiver : BroadcastReceiver() {
 
         Log.i(TAG, "Boot completed ($action)")
 
-        // Only restart the service if the user explicitly enabled protection.
-        // Without this guard, the service would start on every boot even before
-        // the user has set up the app, which would be unexpected and wasteful.
         if (!ShieldPreferences.isShieldEnabled(context)) {
-            Log.i(TAG, "Shield is disabled by user — not starting service on boot")
+            Log.i(TAG, "Shield is disabled — not starting service on boot")
             return
         }
 
         Log.i(TAG, "Shield is enabled — starting SensorMonitorService")
 
+        // Start the service unconditionally when shield is enabled.
+        // SensorMonitorService.startForegroundSafely() handles the case where permissions
+        // were revoked between reboots — it starts in degraded mode and logs the state.
+        // This is preferable to silently failing to restart.
         try {
             val serviceIntent = SensorMonitorService.startIntent(context)
             ContextCompat.startForegroundService(context, serviceIntent)
+            Log.i(TAG, "SensorMonitorService start requested successfully")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start SensorMonitorService on boot: ${e.message}", e)
         }

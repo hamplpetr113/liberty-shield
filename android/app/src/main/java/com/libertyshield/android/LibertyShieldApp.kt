@@ -5,6 +5,8 @@
  *
  * Risk: StrictMode false positives in release → only enabled in debug builds.
  * Risk: WorkManager re-initialization → idempotent by design.
+ * Risk: SQLiteDatabase.loadLibs() failure → logged but not re-thrown; app can still
+ *       open UI and show diagnostics even if database is unavailable.
  */
 package com.libertyshield.android
 
@@ -32,56 +34,50 @@ class LibertyShieldApp : Application(), Configuration.Provider {
     }
 
     override fun onCreate() {
+        super.onCreate()
+
+        // Load SQLCipher native libs FIRST — must happen before any SupportFactory
+        // instantiation in DatabaseModule. On exotic devices this can fail (missing .so),
+        // in which case we log the error but do NOT rethrow — the app can still show UI
+        // and diagnostics even if the encrypted database is unavailable.
         try {
-            super.onCreate()
-            // Load SQLCipher native libs FIRST — must happen before any SupportFactory
-            // instantiation in DatabaseModule. Throws UnsatisfiedLinkError (an Error, not
-            // Exception) if the .so files are missing; caught by the Throwable handler below.
             SQLiteDatabase.loadLibs(this)
-
-            // Create notification channel BEFORE anything else that may start a service.
-            // This must happen in Application.onCreate() so the channel exists even if the
-            // service is started by BootReceiver before the Activity is ever opened.
-            createNotificationChannels()
-
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                enableStrictModeInDebug()
-            }
+            Log.d(TAG, "SQLCipher native libs loaded successfully")
         } catch (e: Throwable) {
-            Log.e(TAG, "CRASH in Application.onCreate: ${e.message}", e)
-            throw e
+            Log.e(TAG, "SQLCipher loadLibs() FAILED — encrypted database will be unavailable: ${e.message}", e)
+            // Continue; DatabaseModule will fail when first accessed and show error in Debug screen.
+        }
+
+        // Create notification channel BEFORE anything else that may start a service.
+        // This must happen in Application.onCreate() so the channel exists even if the
+        // service is started by BootReceiver before the Activity is ever opened.
+        try {
+            createNotificationChannels()
+        } catch (e: Throwable) {
+            Log.e(TAG, "Failed to create notification channels: ${e.message}", e)
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            enableStrictModeInDebug()
         }
     }
 
-    /**
-     * Creates all notification channels for the app.
-     * Safe to call multiple times — creating an existing channel is a no-op.
-     * Must be called before any startForeground() call.
-     */
     private fun createNotificationChannels() {
-        // NotificationChannel requires API 26 which is our minSdk, but the guard
-        // is kept for clarity and in case the constant ever changes.
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                NOTIFICATION_CHANNEL_ID,
-                "Liberty Shield Protection",
-                NotificationManager.IMPORTANCE_LOW
-            ).apply {
-                description = "Liberty Shield is actively protecting your device"
-                setShowBadge(false)
-                enableVibration(false)
-                enableLights(false)
-            }
-            getSystemService(NotificationManager::class.java)
-                .createNotificationChannel(channel)
-            Log.d(TAG, "Notification channel created: $NOTIFICATION_CHANNEL_ID")
+        val channel = NotificationChannel(
+            NOTIFICATION_CHANNEL_ID,
+            "Liberty Shield Protection",
+            NotificationManager.IMPORTANCE_LOW
+        ).apply {
+            description = "Liberty Shield is actively protecting your device"
+            setShowBadge(false)
+            enableVibration(false)
+            enableLights(false)
         }
+        getSystemService(NotificationManager::class.java)
+            .createNotificationChannel(channel)
+        Log.d(TAG, "Notification channel created: $NOTIFICATION_CHANNEL_ID")
     }
 
-    /**
-     * Provide WorkManager configuration with Hilt worker factory.
-     * This allows @HiltWorker injection into CoroutineWorker subclasses.
-     */
     override val workManagerConfiguration: Configuration
         get() = Configuration.Builder()
             .setWorkerFactory(workerFactory)
@@ -99,7 +95,7 @@ class LibertyShieldApp : Application(), Configuration.Provider {
                 .detectDiskReads()
                 .detectDiskWrites()
                 .detectNetwork()
-                .penaltyLog()
+                .penaltyLog()   // log-only; never penaltyDeath in case of false positives
                 .build()
         )
 

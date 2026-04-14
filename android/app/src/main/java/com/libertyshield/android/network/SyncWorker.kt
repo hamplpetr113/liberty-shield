@@ -1,9 +1,13 @@
 /*
  * Threat model: Reliable sync layer.
  * Risk: Network unavailable → events queued in Room, retried by WorkManager
- * Risk: API auth failure → logged, not retried (avoids lockout)
+ * Risk: API auth failure → logged as SYNC_FAILED, not retried (avoids lockout)
  * Risk: Partial sync → each event marked synced individually after successful upload
  * Risk: Worker injection failure → HiltWorker annotation + HiltWorkerFactory in App
+ * Risk: Starting foreground service from Worker context → NOT done here.
+ *       SensorMonitorService is self-healing via START_STICKY; BootReceiver handles reboots.
+ *       Attempting startForegroundService() from a non-foreground Worker throws
+ *       ForegroundServiceStartNotAllowedException on Android 12+.
  */
 package com.libertyshield.android.network
 
@@ -19,9 +23,8 @@ import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.libertyshield.android.data.ShieldPreferences
 import com.libertyshield.android.data.model.EventAction
-import com.libertyshield.android.data.repository.EventRepository
 import com.libertyshield.android.data.prefs.SecurePrefs
-import com.libertyshield.android.service.SensorMonitorService
+import com.libertyshield.android.data.repository.EventRepository
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import java.util.concurrent.TimeUnit
@@ -40,10 +43,6 @@ class SyncWorker @AssistedInject constructor(
         const val WORK_NAME = "liberty_shield_sync"
         private const val BATCH_SIZE = 50
 
-        /**
-         * Enqueues a periodic sync job that runs every 15 minutes when network is available.
-         * Uses KEEP policy — if a job is already queued, it won't be replaced.
-         */
         fun schedulePeriodicSync(context: Context) {
             val constraints = Constraints.Builder()
                 .setRequiredNetworkType(NetworkType.CONNECTED)
@@ -67,10 +66,16 @@ class SyncWorker @AssistedInject constructor(
     override suspend fun doWork(): Result {
         Log.d(TAG, "SyncWorker starting")
 
+        // Config check — report as failure so the Debug screen shows the real state,
+        // not a misleading "success" when nothing was actually attempted.
         val apiKey = securePrefs.getApiKey()
         if (apiKey.isEmpty()) {
-            Log.w(TAG, "API key not configured — skipping sync")
-            return Result.success() // Not a retryable failure
+            Log.w(TAG, "API key not configured — sync skipped. Set SENSOR_API_KEY in Settings.")
+            ShieldPreferences.setLastSyncResult(
+                applicationContext, success = false, eventCount = 0
+            )
+            // Use failure (not retry) — missing config is not a transient network error.
+            return Result.failure()
         }
 
         val authHeader = "Bearer $apiKey"
@@ -80,24 +85,28 @@ class SyncWorker @AssistedInject constructor(
 
             if (unsyncedEvents.isEmpty()) {
                 Log.d(TAG, "No unsynced events — nothing to do")
+                ShieldPreferences.setLastSyncResult(
+                    applicationContext, success = true, eventCount = 0
+                )
                 return Result.success()
             }
 
             Log.i(TAG, "Syncing ${unsyncedEvents.size} events in batches of $BATCH_SIZE")
 
+            var successCount = 0
             var anyFailure = false
 
             for (batch in unsyncedEvents.chunked(BATCH_SIZE)) {
                 for (event in batch) {
                     val payload = SensorEventPayload(
-                        deviceId = event.deviceId,
-                        sensor = event.sensor.name.lowercase(),
-                        appPackage = event.packageName,
-                        appLabel = event.appLabel,
-                        action = event.action,
-                        riskScore = event.riskScore,
+                        deviceId           = event.deviceId,
+                        sensor             = event.sensor.name.lowercase(),
+                        appPackage         = event.packageName,
+                        appLabel           = event.appLabel,
+                        action             = event.action,
+                        riskScore          = event.riskScore,
                         misdirectionActive = event.misdirectionActive,
-                        ts = event.timestamp
+                        ts                 = event.timestamp
                     )
 
                     try {
@@ -105,12 +114,15 @@ class SyncWorker @AssistedInject constructor(
 
                         when {
                             response.isSuccessful -> {
-                                // Mark this event synced immediately
                                 eventRepository.markSynced(listOf(event.id))
+                                successCount++
                                 Log.v(TAG, "Event ${event.id} synced successfully")
                             }
                             response.code() == 401 -> {
                                 Log.e(TAG, "Auth failure (401) — aborting sync to avoid lockout")
+                                ShieldPreferences.setLastSyncResult(
+                                    applicationContext, success = false, eventCount = successCount
+                                )
                                 return Result.failure()
                             }
                             response.code() in 500..599 -> {
@@ -118,61 +130,46 @@ class SyncWorker @AssistedInject constructor(
                                 anyFailure = true
                             }
                             else -> {
-                                Log.w(TAG, "Unexpected response ${response.code()} for event ${event.id}")
+                                Log.w(TAG, "Unexpected ${response.code()} for event ${event.id}")
                                 anyFailure = true
                             }
                         }
                     } catch (e: Exception) {
-                        Log.e(TAG, "Network error syncing event ${event.id}: ${e.message}")
+                        Log.e(TAG, "Network error for event ${event.id}: ${e.message}")
                         anyFailure = true
                     }
                 }
             }
 
-            val syncedCount = unsyncedEvents.size - (if (anyFailure) 1 else 0)
-
             if (anyFailure) {
-                Log.w(TAG, "Some events failed to sync — scheduling retry")
-                ShieldPreferences.setLastSyncResult(applicationContext, success = false, eventCount = syncedCount)
-                // Restart service if shield is enabled but service was killed
-                restartServiceIfNeeded()
+                Log.w(TAG, "Some events failed to sync ($successCount/${unsyncedEvents.size} succeeded) — scheduling retry")
+                ShieldPreferences.setLastSyncResult(
+                    applicationContext, success = false, eventCount = successCount
+                )
                 Result.retry()
             } else {
-                Log.i(TAG, "All events synced successfully")
-                ShieldPreferences.setLastSyncResult(applicationContext, success = true, eventCount = unsyncedEvents.size)
+                Log.i(TAG, "All ${unsyncedEvents.size} events synced successfully")
+                ShieldPreferences.setLastSyncResult(
+                    applicationContext, success = true, eventCount = successCount
+                )
                 try {
                     eventRepository.logSystemEvent(
                         action    = EventAction.SYNC_SUCCESS,
-                        label     = "Sync: ${unsyncedEvents.size} events uploaded",
+                        label     = "Sync: $successCount events uploaded",
                         riskScore = 0
                     )
                 } catch (e: Exception) {
-                    Log.w(TAG, "Could not log SYNC_SUCCESS: ${e.message}")
+                    Log.w(TAG, "Could not log SYNC_SUCCESS event: ${e.message}")
                 }
-                restartServiceIfNeeded()
                 Result.success()
             }
 
         } catch (e: Exception) {
             Log.e(TAG, "Unexpected error in SyncWorker: ${e.message}", e)
-            ShieldPreferences.setLastSyncResult(applicationContext, success = false, eventCount = 0)
+            ShieldPreferences.setLastSyncResult(
+                applicationContext, success = false, eventCount = 0
+            )
             Result.retry()
-        }
-    }
-
-    /**
-     * If the user has shield enabled but the service is not running
-     * (e.g., killed by OEM battery saver), attempt to restart it.
-     */
-    private fun restartServiceIfNeeded() {
-        if (ShieldPreferences.isShieldEnabled(applicationContext)) {
-            try {
-                val intent = SensorMonitorService.startIntent(applicationContext)
-                androidx.core.content.ContextCompat.startForegroundService(applicationContext, intent)
-                Log.i(TAG, "Re-started SensorMonitorService from SyncWorker heartbeat")
-            } catch (e: Exception) {
-                Log.w(TAG, "Could not restart SensorMonitorService: ${e.message}")
-            }
         }
     }
 }
