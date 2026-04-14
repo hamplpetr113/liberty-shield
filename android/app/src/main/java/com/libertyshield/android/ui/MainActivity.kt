@@ -11,6 +11,7 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -18,14 +19,22 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -35,11 +44,18 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavDestination.Companion.hierarchy
@@ -48,6 +64,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import com.libertyshield.android.util.CrashLogger
 import com.libertyshield.android.ui.screens.DebugScreen
 import com.libertyshield.android.ui.screens.EventsScreen
 import com.libertyshield.android.ui.screens.HomeScreen
@@ -57,6 +74,9 @@ import com.libertyshield.android.ui.theme.ShieldAccent
 import com.libertyshield.android.ui.theme.ShieldSurface
 import com.libertyshield.android.ui.theme.ShieldTextMuted
 import dagger.hilt.android.AndroidEntryPoint
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 object NavRoutes {
     const val HOME     = "home"
@@ -67,6 +87,10 @@ object NavRoutes {
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
+
+    companion object {
+        private const val TAG = "MainActivity"
+    }
 
     private val viewModel: MainViewModel by viewModels()
 
@@ -87,13 +111,13 @@ class MainActivity : ComponentActivity() {
     ) { results ->
         val denied = results.filterValues { !it }.keys.toList()
         if (denied.isNotEmpty()) {
-            android.util.Log.w("MainActivity", "Denied permissions: $denied")
+            Log.w(TAG, "Denied permissions: $denied")
         }
-        // Refresh VM state after permission result
         viewModel.refreshState()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        Log.i(TAG, "MainActivity.onCreate START")
         try {
             super.onCreate(savedInstanceState)
 
@@ -102,6 +126,14 @@ class MainActivity : ComponentActivity() {
 
             checkAndRequestPermissions()
 
+            // Read any previous crash BEFORE rendering so SafeFallbackScreen can show it
+            // without needing a ViewModel or DB.
+            val previousCrash = CrashLogger.getLastCrash(this)
+            if (previousCrash != null) {
+                Log.w(TAG, "Previous crash detected: ${previousCrash.summary}")
+            }
+
+            Log.i(TAG, "setContent BEGIN")
             setContent {
                 LibertyShieldTheme {
                     if (showPermissionRationale) {
@@ -117,14 +149,44 @@ class MainActivity : ComponentActivity() {
                             }
                         )
                     }
-                    LibertyShieldApp()
+                    if (previousCrash != null) {
+                        // Show crash diagnostic screen on first launch after a crash.
+                        // The user can proceed to the main app from here.
+                        SafeFallbackScreen(
+                            crash = previousCrash,
+                            onProceed = {
+                                CrashLogger.clear(this@MainActivity)
+                                // Restart the activity so the normal UI loads clean
+                                recreate()
+                            }
+                        )
+                    } else {
+                        LibertyShieldApp()
+                    }
                 }
             }
+            Log.i(TAG, "setContent END")
+
         } catch (e: Throwable) {
             // Log but do NOT rethrow — a crash here kills the process before any UI is shown.
-            // The app will render in a degraded state; the Debug tab will show what failed.
-            android.util.Log.e("LibertyShield", "Error in MainActivity.onCreate — continuing in degraded mode: ${e.message}", e)
+            Log.e(TAG, "FATAL in MainActivity.onCreate: ${e.message}", e)
+            CrashLogger.saveCrash(applicationContext, e)
+
+            // Try to render a minimal fallback. This may itself fail if super.onCreate()
+            // didn't complete, but the crash is already persisted above.
+            try {
+                setContent {
+                    SafeFallbackScreen(
+                        crash = CrashLogger.getLastCrash(this@MainActivity),
+                        inlineError = "${e.javaClass.simpleName}: ${e.message}",
+                        onProceed = null  // Can't safely proceed if onCreate failed
+                    )
+                }
+            } catch (fe: Throwable) {
+                Log.e(TAG, "SafeFallbackScreen also failed: ${fe.message} — crash is in SharedPrefs")
+            }
         }
+        Log.i(TAG, "MainActivity.onCreate END")
     }
 
     override fun onResume() {
@@ -151,8 +213,106 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+// ── Ultra-safe fallback screen ────────────────────────────────────────────────
+// No ViewModel, no Hilt, no Room — only plain Compose + SharedPrefs via CrashLogger.
+// Renders even if the entire DI graph is broken.
+
+@Composable
+fun SafeFallbackScreen(
+    crash: CrashLogger.CrashInfo?,
+    inlineError: String? = null,
+    onProceed: (() -> Unit)?
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xFF0D1117))
+            .verticalScroll(rememberScrollState())
+            .padding(16.dp)
+    ) {
+        Spacer(modifier = Modifier.height(32.dp))
+
+        Text(
+            text = "Liberty Shield — Startup Failure",
+            color = Color(0xFFFF4444),
+            fontWeight = FontWeight.Bold,
+            fontSize = 18.sp
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Text(
+            text = "A fatal error occurred on the previous or current launch.\n" +
+                   "The full stack trace is in Logcat (tag: CrashLogger / UNCAUGHT EXCEPTION).",
+            color = Color(0xFFAAAAAA),
+            fontSize = 13.sp
+        )
+
+        if (inlineError != null) {
+            Spacer(modifier = Modifier.height(12.dp))
+            CrashBlock(label = "This launch", content = inlineError)
+        }
+
+        if (crash != null) {
+            Spacer(modifier = Modifier.height(12.dp))
+            val ts = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+                .format(Date(crash.timestamp))
+            CrashBlock(
+                label   = "Last crash  ($ts  thread=${crash.threadName})",
+                content = "${crash.exceptionClass}\n${crash.message}\n\n${crash.stacktrace}"
+            )
+        }
+
+        Spacer(modifier = Modifier.height(20.dp))
+
+        if (onProceed != null) {
+            Button(
+                onClick = onProceed,
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1F6FEB))
+            ) {
+                Text("Clear crash log and restart", color = Color.White)
+            }
+        }
+
+        Spacer(modifier = Modifier.height(32.dp))
+    }
+}
+
+@Composable
+private fun CrashBlock(label: String, content: String) {
+    Text(
+        text = label,
+        color = Color(0xFFFF8C42),
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 12.sp
+    )
+    Spacer(modifier = Modifier.height(4.dp))
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(Color(0xFF161B22))
+            .padding(10.dp)
+    ) {
+        Text(
+            text = content,
+            color = Color(0xFFE6EDF3),
+            fontFamily = FontFamily.Monospace,
+            fontSize = 10.sp,
+            lineHeight = 15.sp
+        )
+    }
+}
+
+// ── Normal app shell ──────────────────────────────────────────────────────────
+
 @Composable
 private fun LibertyShieldApp() {
+    // Log on every first composition of this composable (once per Activity lifecycle)
+    val ctx = LocalContext.current
+    SideEffect {
+        Log.i("MainActivity", "LibertyShieldApp: first composition BEGIN")
+    }
+
     val navController = rememberNavController()
 
     data class NavItem(val route: String, val label: String, val icon: androidx.compose.ui.graphics.vector.ImageVector)

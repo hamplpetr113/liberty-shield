@@ -53,6 +53,10 @@ class MainViewModel @Inject constructor(
     // ===== STARTUP DIAGNOSTICS =====
     // Visible in DebugScreen so the user can see what failed on launch.
 
+    init {
+        Log.i(TAG, "MainViewModel INIT BEGIN")
+    }
+
     private val _databaseAvailable = MutableStateFlow(true)
     val databaseAvailable: StateFlow<Boolean> = _databaseAvailable
 
@@ -227,6 +231,10 @@ class MainViewModel @Inject constructor(
 
     val hasSensorApiKey: Boolean
         get() = try { securePrefs.getApiKey().isNotEmpty() } catch (e: Throwable) { false }
+
+    init {
+        Log.i(TAG, "MainViewModel INIT END — databaseAvailable=${_databaseAvailable.value} startupError=${_startupError.value}")
+    }
 
     // ===== ACTIONS =====
 

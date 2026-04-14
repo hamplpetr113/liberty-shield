@@ -18,6 +18,7 @@ import android.os.StrictMode
 import android.util.Log
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
+import com.libertyshield.android.util.CrashLogger
 import dagger.hilt.android.HiltAndroidApp
 import net.sqlcipher.database.SQLiteDatabase
 import javax.inject.Inject
@@ -34,6 +35,11 @@ class LibertyShieldApp : Application(), Configuration.Provider {
     }
 
     override fun onCreate() {
+        // Install crash handler BEFORE super.onCreate() so that Hilt component
+        // creation failures and SQLCipher errors are captured.
+        CrashLogger.install(this)
+        Log.i(TAG, "Application.onCreate START  pid=${android.os.Process.myPid()}")
+
         super.onCreate()
 
         // Load SQLCipher native libs FIRST — must happen before any SupportFactory
@@ -60,6 +66,8 @@ class LibertyShieldApp : Application(), Configuration.Provider {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             enableStrictModeInDebug()
         }
+
+        Log.i(TAG, "Application.onCreate END")
     }
 
     private fun createNotificationChannels() {

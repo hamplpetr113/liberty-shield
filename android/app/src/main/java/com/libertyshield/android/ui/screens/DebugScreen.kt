@@ -27,12 +27,18 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -40,6 +46,7 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.libertyshield.android.BuildConfig
 import com.libertyshield.android.ui.MainViewModel
+import com.libertyshield.android.util.CrashLogger
 import com.libertyshield.android.ui.theme.RiskHigh
 import com.libertyshield.android.ui.theme.RiskLow
 import com.libertyshield.android.ui.theme.RiskMedium
@@ -58,6 +65,10 @@ import java.util.Locale
 fun DebugScreen(
     viewModel: MainViewModel = hiltViewModel()
 ) {
+    val context = LocalContext.current
+    var lastCrash     by remember { mutableStateOf(CrashLogger.getLastCrash(context)) }
+    var crashDismissed by remember { mutableStateOf(false) }
+
     val shieldActive      by viewModel.shieldActive.collectAsState()
     val permissionState   by viewModel.permissionState.collectAsState()
     val recentEvents      by viewModel.recentEvents.collectAsState()
@@ -77,6 +88,67 @@ fun DebugScreen(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
+        // ===== LAST CRASH (shown before everything else) =====
+        if (lastCrash != null && !crashDismissed) {
+            item {
+                val crash = lastCrash!!
+                val ts = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+                    .format(Date(crash.timestamp))
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF2D0000)),
+                    shape = RoundedCornerShape(12.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, RiskHigh)
+                ) {
+                    Column(modifier = Modifier.padding(14.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "⚠ LAST CRASH",
+                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                color = RiskHigh
+                            )
+                            Button(
+                                onClick = {
+                                    CrashLogger.clear(context)
+                                    lastCrash = null
+                                    crashDismissed = true
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = RiskHigh.copy(alpha = 0.2f)),
+                                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                            ) {
+                                Text("Clear", color = RiskHigh, style = MaterialTheme.typography.labelSmall)
+                            }
+                        }
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 6.dp), color = RiskHigh.copy(alpha = 0.3f))
+                        DebugRow("Time",   ts,               valueColor = ShieldTextMuted)
+                        DebugRow("Thread", crash.threadName, valueColor = ShieldTextMuted)
+                        DebugRow("Class",  crash.exceptionClass, valueColor = RiskHigh)
+                        DebugRow("Message", crash.message,   valueColor = Color(0xFFFFAAAA))
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = "Stack trace:",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = ShieldTextMuted
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = crash.stacktrace.take(1200),
+                            style = MaterialTheme.typography.bodySmall.copy(
+                                fontFamily = FontFamily.Monospace,
+                                fontSize   = 9.sp,
+                                lineHeight = 13.sp
+                            ),
+                            color = Color(0xFFBBBBBB)
+                        )
+                    }
+                }
+            }
+        }
+
         // Header
         item {
             Row(
