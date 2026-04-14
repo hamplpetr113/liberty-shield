@@ -53,6 +53,13 @@ interface SensorEventDao {
     fun getEventCount(): Flow<Int>
 
     /**
+     * Observe the count of events that have not yet been synced to the backend.
+     * Drives the "unsynced" badge in HomeScreen and DebugScreen.
+     */
+    @Query("SELECT COUNT(*) FROM sensor_events WHERE synced = 0")
+    fun getUnsyncedCount(): Flow<Int>
+
+    /**
      * Delete all events older than the given timestamp (housekeeping).
      */
     @Query("DELETE FROM sensor_events WHERE timestamp < :cutoffMs")

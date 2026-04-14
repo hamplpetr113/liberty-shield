@@ -17,8 +17,11 @@ import androidx.work.NetworkType
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import com.libertyshield.android.data.ShieldPreferences
+import com.libertyshield.android.data.model.EventAction
 import com.libertyshield.android.data.repository.EventRepository
 import com.libertyshield.android.data.prefs.SecurePrefs
+import com.libertyshield.android.service.SensorMonitorService
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import java.util.concurrent.TimeUnit
@@ -126,17 +129,50 @@ class SyncWorker @AssistedInject constructor(
                 }
             }
 
+            val syncedCount = unsyncedEvents.size - (if (anyFailure) 1 else 0)
+
             if (anyFailure) {
                 Log.w(TAG, "Some events failed to sync — scheduling retry")
+                ShieldPreferences.setLastSyncResult(applicationContext, success = false, eventCount = syncedCount)
+                // Restart service if shield is enabled but service was killed
+                restartServiceIfNeeded()
                 Result.retry()
             } else {
                 Log.i(TAG, "All events synced successfully")
+                ShieldPreferences.setLastSyncResult(applicationContext, success = true, eventCount = unsyncedEvents.size)
+                try {
+                    eventRepository.logSystemEvent(
+                        action    = EventAction.SYNC_SUCCESS,
+                        label     = "Sync: ${unsyncedEvents.size} events uploaded",
+                        riskScore = 0
+                    )
+                } catch (e: Exception) {
+                    Log.w(TAG, "Could not log SYNC_SUCCESS: ${e.message}")
+                }
+                restartServiceIfNeeded()
                 Result.success()
             }
 
         } catch (e: Exception) {
             Log.e(TAG, "Unexpected error in SyncWorker: ${e.message}", e)
+            ShieldPreferences.setLastSyncResult(applicationContext, success = false, eventCount = 0)
             Result.retry()
+        }
+    }
+
+    /**
+     * If the user has shield enabled but the service is not running
+     * (e.g., killed by OEM battery saver), attempt to restart it.
+     */
+    private fun restartServiceIfNeeded() {
+        if (ShieldPreferences.isShieldEnabled(applicationContext)) {
+            try {
+                val intent = SensorMonitorService.startIntent(applicationContext)
+                androidx.core.content.ContextCompat.startForegroundService(applicationContext, intent)
+                Log.i(TAG, "Re-started SensorMonitorService from SyncWorker heartbeat")
+            } catch (e: Exception) {
+                Log.w(TAG, "Could not restart SensorMonitorService: ${e.message}")
+            }
         }
     }
 }

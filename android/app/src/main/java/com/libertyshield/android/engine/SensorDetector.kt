@@ -16,7 +16,7 @@ import android.util.Log
 import javax.inject.Inject
 import javax.inject.Singleton
 
-enum class SensorType { MICROPHONE, CAMERA }
+enum class SensorType { MICROPHONE, CAMERA, SYSTEM }
 
 data class DetectedAccess(
     val packageName: String,

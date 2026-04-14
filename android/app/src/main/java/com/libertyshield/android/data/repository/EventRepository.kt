@@ -19,6 +19,9 @@ import kotlinx.coroutines.flow.map
 import javax.inject.Inject
 import javax.inject.Singleton
 
+// Package name used for all system/lifecycle events written by Liberty Shield itself.
+private const val LS_PACKAGE = "com.libertyshield.android"
+
 @Singleton
 class EventRepository @Inject constructor(
     private val sensorEventDao: SensorEventDao,
@@ -97,4 +100,36 @@ class EventRepository @Inject constructor(
      * Observe total event count for the dashboard counter.
      */
     fun getEventCount(): Flow<Int> = sensorEventDao.getEventCount()
+
+    /**
+     * Observe count of events pending upload to the backend.
+     * Drives the unsynced badge in HomeScreen / DebugScreen.
+     */
+    fun getUnsyncedCount(): Flow<Int> = sensorEventDao.getUnsyncedCount()
+
+    /**
+     * Logs a Liberty Shield system/lifecycle event (not a sensor hardware access).
+     *
+     * Examples: service_started, boot_completed, permission_missing.
+     * These appear in the event log under SensorType.SYSTEM so they are
+     * visible in EventFilter.ALL but excluded from MICROPHONE / CAMERA filters.
+     *
+     * @param action  An EventAction constant (e.g. EventAction.SERVICE_STARTED)
+     * @param label   Human-readable description (default: "Liberty Shield")
+     * @param riskScore 0 for lifecycle events; non-zero for configuration warnings
+     */
+    suspend fun logSystemEvent(
+        action:    String,
+        label:     String = "Liberty Shield",
+        riskScore: Int    = 0
+    ) {
+        logEvent(
+            packageName       = LS_PACKAGE,
+            appLabel          = label,
+            sensor            = SensorType.SYSTEM,
+            action            = action,
+            riskScore         = riskScore,
+            misdirectionActive = false
+        )
+    }
 }

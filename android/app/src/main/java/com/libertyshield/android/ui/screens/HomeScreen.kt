@@ -6,6 +6,12 @@
  */
 package com.libertyshield.android.ui.screens
 
+import android.Manifest
+import android.content.Intent
+import android.os.Build
+import android.provider.Settings
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
@@ -33,9 +39,11 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Camera
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -45,6 +53,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -58,6 +67,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.libertyshield.android.data.PermissionIssue
+import com.libertyshield.android.data.PermissionState
 import com.libertyshield.android.data.model.SensorEvent
 import com.libertyshield.android.engine.SensorType
 import com.libertyshield.android.ui.MainViewModel
@@ -84,10 +95,12 @@ fun HomeScreen(
     viewModel: MainViewModel = hiltViewModel()
 ) {
     val context = LocalContext.current
-    val shieldActive by viewModel.shieldActive.collectAsState()
-    val recentEvents by viewModel.recentEvents.collectAsState()
-    val riskLevel by viewModel.riskLevel.collectAsState()
-    val eventCount by viewModel.eventCount.collectAsState()
+    val shieldActive    by viewModel.shieldActive.collectAsState()
+    val permissionState by viewModel.permissionState.collectAsState()
+    val recentEvents    by viewModel.recentEvents.collectAsState()
+    val riskLevel       by viewModel.riskLevel.collectAsState()
+    val eventCount      by viewModel.eventCount.collectAsState()
+    val unsyncedCount   by viewModel.unsyncedCount.collectAsState()
 
     LazyColumn(
         modifier = Modifier
@@ -115,10 +128,29 @@ fun HomeScreen(
                     color = ShieldTextPrimary
                 )
                 Spacer(modifier = Modifier.weight(1f))
-                Text(
-                    text = "$eventCount events",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = ShieldTextMuted
+                Column(horizontalAlignment = Alignment.End) {
+                    Text(
+                        text = "$eventCount events",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = ShieldTextMuted
+                    )
+                    if (unsyncedCount > 0) {
+                        Text(
+                            text = "$unsyncedCount unsynced",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = RiskMedium
+                        )
+                    }
+                }
+            }
+        }
+
+        // Permission status card (only show if there are issues)
+        if (permissionState.issues.isNotEmpty()) {
+            item {
+                PermissionStatusCard(
+                    permissionState = permissionState,
+                    onRefresh = { viewModel.refreshState() }
                 )
             }
         }
@@ -127,8 +159,9 @@ fun HomeScreen(
         item {
             ShieldStatusCard(
                 isActive = shieldActive,
+                canStart = permissionState.canStartShield,
                 onStartClick = { viewModel.startShield(context) },
-                onStopClick = { viewModel.stopShield(context) }
+                onStopClick  = { viewModel.stopShield(context) }
             )
         }
 
@@ -137,7 +170,7 @@ fun HomeScreen(
             RiskLevelCard(riskLevel = riskLevel)
         }
 
-        // Recent Events
+        // Recent Events header
         item {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -178,13 +211,113 @@ fun HomeScreen(
 }
 
 @Composable
+private fun PermissionStatusCard(
+    permissionState: PermissionState,
+    onRefresh: () -> Unit
+) {
+    val context = LocalContext.current
+
+    // Launcher for RECORD_AUDIO + CAMERA runtime permissions
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { onRefresh() }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = ShieldSurface),
+        shape = RoundedCornerShape(16.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, RiskMedium.copy(alpha = 0.5f))
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Default.Warning,
+                    contentDescription = null,
+                    tint = RiskMedium,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "Action Required",
+                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                    color = RiskMedium
+                )
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            permissionState.issues.forEach { issue ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp),
+                    verticalAlignment = Alignment.Top
+                ) {
+                    Icon(
+                        imageVector = if (issue.blocking) Icons.Default.Warning else Icons.Default.Warning,
+                        contentDescription = null,
+                        tint = if (issue.blocking) ShieldRed else RiskMedium,
+                        modifier = Modifier.size(14.dp).padding(top = 2.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = issue.label + if (issue.blocking) " (required)" else " (recommended)",
+                            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                            color = if (issue.blocking) ShieldRed else ShieldTextPrimary
+                        )
+                        Text(
+                            text = issue.detail,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = ShieldTextMuted
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    TextButton(
+                        onClick = {
+                            when (issue) {
+                                PermissionIssue.RECORD_AUDIO -> {
+                                    permissionLauncher.launch(arrayOf(Manifest.permission.RECORD_AUDIO))
+                                }
+                                PermissionIssue.CAMERA -> {
+                                    permissionLauncher.launch(arrayOf(Manifest.permission.CAMERA))
+                                }
+                                PermissionIssue.POST_NOTIFICATIONS -> {
+                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                        permissionLauncher.launch(arrayOf(Manifest.permission.POST_NOTIFICATIONS))
+                                    }
+                                }
+                                PermissionIssue.USAGE_ACCESS -> {
+                                    context.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
+                                }
+                                PermissionIssue.BATTERY_OPTIMIZATION -> {
+                                    context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                                }
+                            }
+                        },
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                    ) {
+                        Text("Fix", color = ShieldAccent, style = MaterialTheme.typography.labelSmall)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun ShieldStatusCard(
     isActive: Boolean,
+    canStart: Boolean,
     onStartClick: () -> Unit,
     onStopClick: () -> Unit
 ) {
     val statusColor by animateColorAsState(
-        targetValue = if (isActive) ShieldGreen else ShieldRed,
+        targetValue = when {
+            isActive -> ShieldGreen
+            canStart -> ShieldTextMuted
+            else     -> ShieldRed
+        },
         animationSpec = tween(600),
         label = "statusColor"
     )
@@ -192,9 +325,9 @@ private fun ShieldStatusCard(
     val infiniteTransition = rememberInfiniteTransition(label = "pulse")
     val pulseScale by infiniteTransition.animateFloat(
         initialValue = 1f,
-        targetValue = if (isActive) 1.25f else 1f,
+        targetValue  = if (isActive) 1.25f else 1f,
         animationSpec = infiniteRepeatable(
-            animation = tween(1000, easing = FastOutSlowInEasing),
+            animation  = tween(1000, easing = FastOutSlowInEasing),
             repeatMode = RepeatMode.Reverse
         ),
         label = "pulseScale"
@@ -217,7 +350,6 @@ private fun ShieldStatusCard(
                 contentAlignment = Alignment.Center,
                 modifier = Modifier.size(48.dp)
             ) {
-                // Outer ring (pulsing)
                 Box(
                     modifier = Modifier
                         .size(40.dp)
@@ -225,7 +357,6 @@ private fun ShieldStatusCard(
                         .clip(CircleShape)
                         .background(statusColor.copy(alpha = 0.15f))
                 )
-                // Inner dot (solid)
                 Box(
                     modifier = Modifier
                         .size(16.dp)
@@ -238,7 +369,11 @@ private fun ShieldStatusCard(
 
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = if (isActive) "ACTIVE" else "INACTIVE",
+                    text = when {
+                        isActive -> "ACTIVE"
+                        canStart -> "INACTIVE"
+                        else     -> "NOT READY"
+                    },
                     style = MaterialTheme.typography.titleMedium.copy(
                         fontWeight = FontWeight.Bold,
                         letterSpacing = 1.sp
@@ -246,7 +381,11 @@ private fun ShieldStatusCard(
                     color = statusColor
                 )
                 Text(
-                    text = if (isActive) "Monitoring all sensor access" else "Protection is stopped",
+                    text = when {
+                        isActive -> "Monitoring all sensor access"
+                        canStart -> "Protection is stopped"
+                        else     -> "Grant required permissions first"
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = ShieldTextMuted
                 )
@@ -265,7 +404,11 @@ private fun ShieldStatusCard(
             } else {
                 Button(
                     onClick = onStartClick,
-                    colors = ButtonDefaults.buttonColors(containerColor = ShieldAccent)
+                    enabled = canStart,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = ShieldAccent,
+                        disabledContainerColor = ShieldBorder
+                    )
                 ) {
                     Text("Start")
                 }
@@ -279,13 +422,13 @@ private fun RiskLevelCard(riskLevel: Int) {
     val riskColor = when {
         riskLevel >= 67 -> RiskHigh
         riskLevel >= 34 -> RiskMedium
-        else -> RiskLow
+        else            -> RiskLow
     }
 
     val riskLabel = when {
         riskLevel >= 67 -> "HIGH RISK"
         riskLevel >= 34 -> "MODERATE"
-        else -> "LOW"
+        else            -> "LOW"
     }
 
     Card(
@@ -337,13 +480,21 @@ private fun RiskLevelCard(riskLevel: Int) {
 
 @Composable
 private fun EventRow(event: SensorEvent) {
-    val sensorIcon = if (event.sensor == SensorType.MICROPHONE) Icons.Default.Mic else Icons.Default.Camera
-    val sensorColor = if (event.sensor == SensorType.MICROPHONE) MicrophoneColor else CameraColor
+    val sensorIcon = when (event.sensor) {
+        SensorType.MICROPHONE -> Icons.Default.Mic
+        SensorType.CAMERA     -> Icons.Default.Camera
+        SensorType.SYSTEM     -> Icons.Default.Shield
+    }
+    val sensorColor = when (event.sensor) {
+        SensorType.MICROPHONE -> MicrophoneColor
+        SensorType.CAMERA     -> CameraColor
+        SensorType.SYSTEM     -> ShieldAccent
+    }
 
     val riskColor = when {
         event.riskScore >= 67 -> RiskHigh
         event.riskScore >= 34 -> RiskMedium
-        else -> RiskLow
+        else                  -> RiskLow
     }
 
     Card(
@@ -382,7 +533,7 @@ private fun EventRow(event: SensorEvent) {
             Spacer(modifier = Modifier.width(8.dp))
 
             // Action pill
-            val actionBg = if (event.action == "start") Color(0xFF1A2D1A) else Color(0xFF1A1A2D)
+            val actionBg    = if (event.action == "start") Color(0xFF1A2D1A) else Color(0xFF1A1A2D)
             val actionColor = if (event.action == "start") ShieldGreen else ShieldTextMuted
 
             Box(
@@ -446,8 +597,8 @@ private fun formatTimeAgo(timestamp: Long): String {
     val diff = System.currentTimeMillis() - timestamp
     return when {
         diff < TimeUnit.MINUTES.toMillis(1) -> "just now"
-        diff < TimeUnit.HOURS.toMillis(1) -> "${TimeUnit.MILLISECONDS.toMinutes(diff)}m ago"
-        diff < TimeUnit.DAYS.toMillis(1) -> "${TimeUnit.MILLISECONDS.toHours(diff)}h ago"
-        else -> SimpleDateFormat("MMM d, HH:mm", Locale.getDefault()).format(Date(timestamp))
+        diff < TimeUnit.HOURS.toMillis(1)   -> "${TimeUnit.MILLISECONDS.toMinutes(diff)}m ago"
+        diff < TimeUnit.DAYS.toMillis(1)    -> "${TimeUnit.MILLISECONDS.toHours(diff)}h ago"
+        else                                -> SimpleDateFormat("MMM d, HH:mm", Locale.getDefault()).format(Date(timestamp))
     }
 }

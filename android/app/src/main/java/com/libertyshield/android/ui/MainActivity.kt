@@ -15,11 +15,13 @@ import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.viewModels
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Settings
@@ -39,30 +41,34 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
+import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import com.libertyshield.android.ui.screens.DebugScreen
 import com.libertyshield.android.ui.screens.EventsScreen
 import com.libertyshield.android.ui.screens.HomeScreen
 import com.libertyshield.android.ui.screens.SettingsScreen
 import com.libertyshield.android.ui.theme.LibertyShieldTheme
 import com.libertyshield.android.ui.theme.ShieldAccent
-import com.libertyshield.android.ui.theme.ShieldBorder
 import com.libertyshield.android.ui.theme.ShieldSurface
 import com.libertyshield.android.ui.theme.ShieldTextMuted
 import dagger.hilt.android.AndroidEntryPoint
 
 object NavRoutes {
-    const val HOME = "home"
-    const val EVENTS = "events"
+    const val HOME     = "home"
+    const val EVENTS   = "events"
     const val SETTINGS = "settings"
+    const val DEBUG    = "debug"
 }
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
+
+    private val viewModel: MainViewModel by viewModels()
 
     // Permissions required for sensor monitoring
     private val requiredPermissions = buildList {
@@ -82,8 +88,9 @@ class MainActivity : ComponentActivity() {
         val denied = results.filterValues { !it }.keys.toList()
         if (denied.isNotEmpty()) {
             android.util.Log.w("MainActivity", "Denied permissions: $denied")
-            // App degrades gracefully — service still runs, but sensor detection may be limited
         }
+        // Refresh VM state after permission result
+        viewModel.refreshState()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -93,9 +100,6 @@ class MainActivity : ComponentActivity() {
             // SECURITY: Prevent screenshots and Recents thumbnails
             window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
 
-            // Request permissions — do NOT start the service here.
-            // The service is only started when the user presses "Start" in HomeScreen,
-            // by which point all required permissions are already confirmed.
             checkAndRequestPermissions()
 
             setContent {
@@ -109,7 +113,6 @@ class MainActivity : ComponentActivity() {
                             },
                             onDismiss = {
                                 showPermissionRationale = false
-                                // Request anyway — user can deny in system dialog
                                 permissionLauncher.launch(pendingPermissions)
                             }
                         )
@@ -123,6 +126,12 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        // Re-check permissions in case the user granted/revoked them in system settings
+        viewModel.refreshState()
+    }
+
     private fun checkAndRequestPermissions() {
         val missing = requiredPermissions.filter { permission ->
             ContextCompat.checkSelfPermission(this, permission) != PackageManager.PERMISSION_GRANTED
@@ -130,7 +139,6 @@ class MainActivity : ComponentActivity() {
 
         if (missing.isEmpty()) return
 
-        // Check if we should show rationale for any missing permission
         val shouldShowRationale = missing.any { shouldShowRequestPermissionRationale(it) }
 
         if (shouldShowRationale) {
@@ -146,10 +154,13 @@ class MainActivity : ComponentActivity() {
 private fun LibertyShieldApp() {
     val navController = rememberNavController()
 
+    data class NavItem(val route: String, val label: String, val icon: androidx.compose.ui.graphics.vector.ImageVector)
+
     val navItems = listOf(
-        Triple(NavRoutes.HOME, "Home", Icons.Default.Home),
-        Triple(NavRoutes.EVENTS, "Events", Icons.Default.List),
-        Triple(NavRoutes.SETTINGS, "Settings", Icons.Default.Settings)
+        NavItem(NavRoutes.HOME,     "Home",     Icons.Default.Home),
+        NavItem(NavRoutes.EVENTS,   "Events",   Icons.Default.List),
+        NavItem(NavRoutes.SETTINGS, "Settings", Icons.Default.Settings),
+        NavItem(NavRoutes.DEBUG,    "Debug",    Icons.Default.BugReport),
     )
 
     Scaffold(
@@ -161,24 +172,24 @@ private fun LibertyShieldApp() {
                 val navBackStackEntry by navController.currentBackStackEntryAsState()
                 val currentDestination = navBackStackEntry?.destination
 
-                navItems.forEach { (route, label, icon) ->
-                    val selected = currentDestination?.hierarchy?.any { it.route == route } == true
+                navItems.forEach { item ->
+                    val selected = currentDestination?.hierarchy?.any { it.route == item.route } == true
                     NavigationBarItem(
                         icon = {
                             Icon(
-                                imageVector = icon,
-                                contentDescription = label
+                                imageVector = item.icon,
+                                contentDescription = item.label
                             )
                         },
                         label = {
                             Text(
-                                text = label,
+                                text = item.label,
                                 style = MaterialTheme.typography.labelMedium
                             )
                         },
                         selected = selected,
                         onClick = {
-                            navController.navigate(route) {
+                            navController.navigate(item.route) {
                                 popUpTo(navController.graph.findStartDestination().id) {
                                     saveState = true
                                 }
@@ -187,11 +198,11 @@ private fun LibertyShieldApp() {
                             }
                         },
                         colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = ShieldAccent,
-                            selectedTextColor = ShieldAccent,
+                            selectedIconColor   = ShieldAccent,
+                            selectedTextColor   = ShieldAccent,
                             unselectedIconColor = ShieldTextMuted,
                             unselectedTextColor = ShieldTextMuted,
-                            indicatorColor = ShieldAccent.copy(alpha = 0.12f)
+                            indicatorColor      = ShieldAccent.copy(alpha = 0.12f)
                         )
                     )
                 }
@@ -221,6 +232,9 @@ private fun LibertyShieldApp() {
                 composable(NavRoutes.SETTINGS) {
                     SettingsScreen()
                 }
+                composable(NavRoutes.DEBUG) {
+                    DebugScreen()
+                }
             }
         }
     }
@@ -234,10 +248,10 @@ private fun PermissionRationaleDialog(
 ) {
     val permissionDescriptions = permissions.mapNotNull { permission ->
         when (permission) {
-            Manifest.permission.RECORD_AUDIO -> "Microphone — required to detect unauthorized microphone access by other apps"
-            Manifest.permission.CAMERA -> "Camera — required to detect unauthorized camera access by other apps"
+            Manifest.permission.RECORD_AUDIO       -> "Microphone — required to detect unauthorized microphone access by other apps"
+            Manifest.permission.CAMERA             -> "Camera — required to detect unauthorized camera access by other apps"
             Manifest.permission.POST_NOTIFICATIONS -> "Notifications — required to alert you when sensor access is detected"
-            else -> null
+            else                                   -> null
         }
     }
 
@@ -267,8 +281,8 @@ private fun PermissionRationaleDialog(
                 Text("Skip", color = ShieldTextMuted)
             }
         },
-        containerColor = ShieldSurface,
+        containerColor    = ShieldSurface,
         titleContentColor = androidx.compose.ui.graphics.Color.White,
-        textContentColor = ShieldTextMuted
+        textContentColor  = ShieldTextMuted
     )
 }

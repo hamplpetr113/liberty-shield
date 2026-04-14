@@ -5,4 +5,60 @@
     <string name="notification_channel_desc">Liberty Shield active protection monitoring</string>
     <string name="notification_title">Liberty Shield Active</string>
     <string name="notification_text">Monitoring microphone and camera access</string>
+
+    <!-- Permission rationale strings -->
+    <string name="perm_rationale_title">Permissions Required</string>
+    <string name="perm_rationale_body">Liberty Shield needs Microphone and Camera permissions to detect when other apps access your sensors without your knowledge.</string>
+    <string name="perm_record_audio_label">Microphone</string>
+    <string name="perm_record_audio_detail">Required to detect unauthorized microphone access by other apps.</string>
+    <string name="perm_camera_label">Camera</string>
+    <string name="perm_camera_detail">Required to detect unauthorized camera access by other apps.</string>
+    <string name="perm_notifications_label">Notifications</string>
+    <string name="perm_notifications_detail">Required to alert you when suspicious sensor access is detected.</string>
+    <string name="perm_usage_access_label">Usage Access</string>
+    <string name="perm_usage_access_detail">Improves background app detection accuracy. Grant in System Settings.</string>
+    <string name="perm_battery_opt_label">Battery Optimization</string>
+    <string name="perm_battery_opt_detail">Prevents Android from killing the protection service.</string>
+
+    <!-- Debug screen labels -->
+    <string name="debug_title">Debug</string>
+    <string name="debug_app_info">App Info</string>
+    <string name="debug_device_config">Device &amp; Config</string>
+    <string name="debug_service_state">Service State</string>
+    <string name="debug_last_sync">Last Sync</string>
+    <string name="debug_permissions">Permissions</string>
+    <string name="debug_recent_events">Last 20 Events</string>
+    <string name="debug_never_synced">Never synced</string>
+
+    <!-- Home screen labels -->
+    <string name="home_shield_active">ACTIVE</string>
+    <string name="home_shield_inactive">INACTIVE</string>
+    <string name="home_shield_not_ready">NOT READY</string>
+    <string name="home_monitoring">Monitoring all sensor access</string>
+    <string name="home_stopped">Protection is stopped</string>
+    <string name="home_grant_permissions">Grant required permissions first</string>
+    <string name="home_threat_level">Threat Level</string>
+    <string name="home_recent_activity">Recent Activity</string>
+    <string name="home_view_all">View All</string>
+    <string name="home_no_activity">No sensor activity detected yet.\nStart protection to begin monitoring.</string>
+    <string name="home_action_required">Action Required</string>
+    <string name="home_start">Start</string>
+    <string name="home_stop">Stop</string>
+
+    <!-- Settings screen labels -->
+    <string name="settings_title">Settings</string>
+    <string name="settings_api_key_title">Server API Key</string>
+    <string name="settings_api_key_hint">Enter your Liberty Shield API key</string>
+    <string name="settings_api_key_footer">Stored encrypted on device via Android Keystore.</string>
+    <string name="settings_notifications_title">Notifications</string>
+    <string name="settings_notifications_alert">Alert notifications</string>
+    <string name="settings_notifications_desc">Notify on high-risk sensor access</string>
+    <string name="settings_whitelist_title">App Whitelist</string>
+    <string name="settings_whitelist_desc">Whitelisted apps will not trigger alerts when accessing sensors.</string>
+    <string name="settings_battery_title">Battery Optimization</string>
+    <string name="settings_battery_desc">For reliable monitoring, Liberty Shield needs to be excluded from battery optimization.</string>
+    <string name="settings_battery_button">Open Battery Settings</string>
+    <string name="settings_usage_title">Usage Access Permission</string>
+    <string name="settings_usage_desc">Usage access is required for accurate background app detection.</string>
+    <string name="settings_usage_button">Request Usage Access</string>
 </resources>

@@ -32,7 +32,8 @@ fun SensorEventEntity.toDomain(): SensorEvent = SensorEvent(
     appLabel = appLabel,
     sensor = when (sensor.lowercase()) {
         "camera" -> SensorType.CAMERA
-        else -> SensorType.MICROPHONE
+        "system" -> SensorType.SYSTEM
+        else     -> SensorType.MICROPHONE
     },
     action = action,
     riskScore = riskScore,

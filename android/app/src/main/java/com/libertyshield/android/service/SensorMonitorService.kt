@@ -10,7 +10,8 @@
  * Risks:
  *   - Polling battery impact → mitigated by 2s interval + doze awareness
  *   - Missing detection window → acceptable with 2s poll
- *   - Service killed → WorkManager restarts within 15 minutes
+ *   - Service killed by system → START_STICKY auto-restart + WorkManager 15-min heartbeat
+ *   - Service killed by OEM battery saver → user guided to exclude from battery optimisation
  */
 package com.libertyshield.android.service
 
@@ -26,10 +27,16 @@ import android.os.Build
 import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationCompat
-import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.Constraints
+import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.NetworkType
+import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import com.libertyshield.android.LibertyShieldApp
 import com.libertyshield.android.R
+import com.libertyshield.android.data.ShieldPreferences
+import com.libertyshield.android.data.model.EventAction
+import com.libertyshield.android.data.prefs.SecurePrefs
 import com.libertyshield.android.data.repository.EventRepository
 import com.libertyshield.android.engine.MisdirectionEngine
 import com.libertyshield.android.engine.SensorDetector
@@ -45,22 +52,26 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 
 @AndroidEntryPoint
 class SensorMonitorService : Service() {
 
-    @Inject lateinit var sensorDetector: SensorDetector
+    @Inject lateinit var sensorDetector:    SensorDetector
     @Inject lateinit var misdirectionEngine: MisdirectionEngine
-    @Inject lateinit var eventRepository: EventRepository
-    @Inject lateinit var appOpsManager: AppOpsManager
-    // Note: packageManager is inherited from Context — no injection needed
+    @Inject lateinit var eventRepository:   EventRepository
+    @Inject lateinit var appOpsManager:     AppOpsManager
+    @Inject lateinit var securePrefs:       SecurePrefs
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var pollJob: Job? = null
 
+    /** True if the user explicitly pressed Stop (vs service being killed externally). */
+    private var stoppedByUser = false
+
     /** Tracks which (packageName + sensor) pairs are currently active, to detect edges. */
-    private val activeOps = mutableSetOf<String>() // key = "$packageName:$sensor"
+    private val activeOps = mutableSetOf<String>()           // "$packageName:$sensor"
 
     /** Tracks last detection time per package for repeat-within-60s scoring. */
     private val lastDetectionTime = mutableMapOf<String, Long>()
@@ -68,16 +79,16 @@ class SensorMonitorService : Service() {
     companion object {
         private const val TAG = "SensorMonitorService"
         const val NOTIFICATION_ID = 1001
-        // Use the channel ID defined in LibertyShieldApp so it is always created
-        // before startForeground() is called, even on cold boot via BootReceiver.
         val CHANNEL_ID get() = LibertyShieldApp.NOTIFICATION_CHANNEL_ID
-        private const val POLL_MS = 2000L
-        private const val ACTIVE_THRESHOLD_MS = 3000L
-        private const val REPEAT_WINDOW_MS = 60_000L
-        private const val RISK_THRESHOLD = 60
+        private const val POLL_MS            = 2_000L
+        private const val REPEAT_WINDOW_MS   = 60_000L
+        private const val RISK_THRESHOLD     = 60
 
-        /** Packages that are legitimately expected to access mic/camera. */
-        val WHITELIST = setOf(
+        /**
+         * Built-in whitelist — always skipped regardless of user settings.
+         * These are known system packages that legitimately access sensors during calls.
+         */
+        private val SYSTEM_WHITELIST = setOf(
             "com.android.phone",
             "com.google.android.dialer",
             "com.libertyshield.android",
@@ -96,6 +107,8 @@ class SensorMonitorService : Service() {
             }
     }
 
+    // ===== LIFECYCLE =====
+
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
@@ -110,27 +123,58 @@ class SensorMonitorService : Service() {
             startForeground(NOTIFICATION_ID, notification)
         }
         Log.i(TAG, "SensorMonitorService created — starting polling loop")
+
+        // Log lifecycle event to Room
+        serviceScope.launch(Dispatchers.IO) {
+            try {
+                eventRepository.logSystemEvent(
+                    action    = EventAction.SERVICE_STARTED,
+                    label     = "Liberty Shield",
+                    riskScore = 0
+                )
+            } catch (e: Exception) {
+                Log.w(TAG, "Could not log SERVICE_STARTED event: ${e.message}")
+            }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == "STOP") {
+            stoppedByUser = true
+            Log.i(TAG, "STOP action received — stopping service")
             stopSelf()
             return START_NOT_STICKY
         }
         if (pollJob?.isActive != true) {
             pollJob = serviceScope.launch { pollSensors() }
         }
+        // Schedule periodic sync heartbeat every time we (re)start
+        enqueueSyncHeartbeat()
         return START_STICKY
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
-        Log.i(TAG, "SensorMonitorService destroyed — scheduling WorkManager restart")
+        Log.i(TAG, "SensorMonitorService destroyed (stoppedByUser=$stoppedByUser)")
         misdirectionEngine.stopMicrophoneMisdirection()
         misdirectionEngine.stopCameraMisdirection(this)
+
+        // Log lifecycle event synchronously on a separate scope since serviceScope is cancelled below
+        val appCtx = applicationContext
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                eventRepository.logSystemEvent(
+                    action    = EventAction.SERVICE_STOPPED,
+                    label     = "Liberty Shield",
+                    riskScore = 0
+                )
+            } catch (e: Exception) {
+                Log.w(TAG, "Could not log SERVICE_STOPPED event: ${e.message}")
+            }
+        }
+
         serviceScope.cancel()
-        scheduleWorkManagerRestart()
         super.onDestroy()
     }
 
@@ -139,28 +183,32 @@ class SensorMonitorService : Service() {
     private suspend fun pollSensors() {
         while (serviceScope.isActive) {
             try {
-                val accesses = sensorDetector.getActiveAccesses()
-                val now = System.currentTimeMillis()
-
+                val accesses   = sensorDetector.getActiveAccesses()
+                val now        = System.currentTimeMillis()
                 val currentKeys = accesses.map { "${it.packageName}:${it.sensor}" }.toSet()
 
-                // Detect STOP edges (was active, now gone)
+                // STOP edges: was active, now gone
                 val stopped = activeOps - currentKeys
                 for (key in stopped) {
                     val parts = key.split(":")
                     if (parts.size == 2) {
-                        val (pkg, sensorStr) = parts
-                        val sensor = runCatching { SensorType.valueOf(sensorStr) }.getOrNull() ?: continue
-                        handleSensorStop(pkg, sensor)
+                        val sensor = runCatching { SensorType.valueOf(parts[1]) }.getOrNull() ?: continue
+                        handleSensorStop(parts[0], sensor)
                     }
                 }
 
-                // Detect START edges (new active ops)
+                // START edges: newly active
                 val started = currentKeys - activeOps
                 for (access in accesses) {
                     val key = "${access.packageName}:${access.sensor}"
                     if (key in started) {
-                        handleSensorStart(access.packageName, access.appLabel, access.sensor, access.isBackground, now)
+                        handleSensorStart(
+                            access.packageName,
+                            access.appLabel,
+                            access.sensor,
+                            access.isBackground,
+                            now
+                        )
                     }
                 }
 
@@ -174,60 +222,68 @@ class SensorMonitorService : Service() {
         }
     }
 
+    // ===== EVENT HANDLERS =====
+
     private fun handleSensorStart(
         packageName: String,
-        appLabel: String,
-        sensor: SensorType,
+        appLabel:    String,
+        sensor:      SensorType,
         isBackground: Boolean,
-        now: Long
+        now:         Long
     ) {
-        if (packageName in WHITELIST) {
+        // Check effective whitelist = system defaults + user's custom SecurePrefs whitelist
+        val effectiveWhitelist = SYSTEM_WHITELIST + securePrefs.getWhitelist()
+        if (packageName in effectiveWhitelist) {
             Log.d(TAG, "Whitelisted access: $packageName / $sensor — ignored")
             return
         }
 
         val riskScore = calculateRiskScore(packageName, sensor, isBackground, now)
-        Log.w(TAG, "Sensor START detected: $packageName / $sensor / risk=$riskScore / bg=$isBackground")
+        Log.w(TAG, "Sensor START: $packageName / $sensor / risk=$riskScore / bg=$isBackground")
 
-        // Apply misdirection if risk is high enough
+        // Activate misdirection if risk exceeds threshold
         if (riskScore > RISK_THRESHOLD) {
             when (sensor) {
                 SensorType.MICROPHONE -> {
                     if (!misdirectionEngine.isMicMisdirectionActive) {
                         misdirectionEngine.startMicrophoneMisdirection()
-                        Log.i(TAG, "Microphone misdirection ACTIVATED for $packageName")
+                        Log.i(TAG, "Mic misdirection ACTIVATED for $packageName")
                     }
                 }
                 SensorType.CAMERA -> {
                     if (!misdirectionEngine.isCamMisdirectionActive) {
                         misdirectionEngine.startCameraMisdirection(this)
-                        Log.i(TAG, "Camera misdirection ACTIVATED for $packageName")
+                        Log.i(TAG, "Cam misdirection ACTIVATED for $packageName")
                     }
                 }
+                SensorType.SYSTEM -> { /* no misdirection for system events */ }
             }
         }
 
         lastDetectionTime[packageName] = now
 
+        val misdirectionNowActive = when (sensor) {
+            SensorType.MICROPHONE -> misdirectionEngine.isMicMisdirectionActive
+            SensorType.CAMERA     -> misdirectionEngine.isCamMisdirectionActive
+            SensorType.SYSTEM     -> false
+        }
+
         serviceScope.launch(Dispatchers.IO) {
             eventRepository.logEvent(
-                packageName = packageName,
-                appLabel = appLabel,
-                sensor = sensor,
-                action = "start",
-                riskScore = riskScore,
-                misdirectionActive = when (sensor) {
-                    SensorType.MICROPHONE -> misdirectionEngine.isMicMisdirectionActive
-                    SensorType.CAMERA -> misdirectionEngine.isCamMisdirectionActive
-                }
+                packageName        = packageName,
+                appLabel           = appLabel,
+                sensor             = sensor,
+                action             = EventAction.SENSOR_START,
+                riskScore          = riskScore,
+                misdirectionActive = misdirectionNowActive
             )
         }
     }
 
     private fun handleSensorStop(packageName: String, sensor: SensorType) {
-        Log.d(TAG, "Sensor STOP detected: $packageName / $sensor")
+        Log.d(TAG, "Sensor STOP: $packageName / $sensor")
 
-        // Only deactivate misdirection if no other active threats remain for this sensor type
+        // Deactivate misdirection only if no other threats remain for this sensor type
         val otherActiveForSensor = activeOps.any { key ->
             key.endsWith(":${sensor.name}") && !key.startsWith("$packageName:")
         }
@@ -235,7 +291,8 @@ class SensorMonitorService : Service() {
         if (!otherActiveForSensor) {
             when (sensor) {
                 SensorType.MICROPHONE -> misdirectionEngine.stopMicrophoneMisdirection()
-                SensorType.CAMERA -> misdirectionEngine.stopCameraMisdirection(this)
+                SensorType.CAMERA     -> misdirectionEngine.stopCameraMisdirection(this)
+                SensorType.SYSTEM     -> { }
             }
         }
 
@@ -247,11 +304,11 @@ class SensorMonitorService : Service() {
             }.getOrDefault(packageName)
 
             eventRepository.logEvent(
-                packageName = packageName,
-                appLabel = appLabel,
-                sensor = sensor,
-                action = "stop",
-                riskScore = 0,
+                packageName        = packageName,
+                appLabel           = appLabel,
+                sensor             = sensor,
+                action             = EventAction.SENSOR_STOP,
+                riskScore          = 0,
                 misdirectionActive = false
             )
         }
@@ -260,56 +317,39 @@ class SensorMonitorService : Service() {
     // ===== RISK SCORING =====
 
     /**
-     * Calculate a risk score 0-100 for a detected sensor access.
+     * Deterministic risk score (0–100) for a detected sensor access.
      *
-     * Factors:
-     *   +40  Unknown app (not in whitelist — already filtered, but for scoring)
-     *   +30  Background access (app not in foreground)
-     *   +20  Multi-sensor (both mic and cam active simultaneously)
-     *   +10  Repeat detection within 60 seconds
+     *  +40  Unknown third-party app (not a known system prefix)
+     *  +30  Background access (app is not in the foreground)
+     *  +20  Multi-sensor (both mic and cam active simultaneously for this package)
+     *  +10  Repeat detection within 60 seconds
      */
     private fun calculateRiskScore(
-        packageName: String,
-        sensor: SensorType,
+        packageName:  String,
+        sensor:       SensorType,
         isBackground: Boolean,
-        now: Long
+        now:          Long
     ): Int {
         var score = 0
-
-        // Unknown app (not a known system package)
-        val isKnownSystem = isKnownSystemPackage(packageName)
-        if (!isKnownSystem) score += 40
-
-        // Background access
+        if (!isKnownSystemPackage(packageName)) score += 40
         if (isBackground) score += 30
 
-        // Multi-sensor: check if the other sensor type is also active
         val otherSensor = if (sensor == SensorType.MICROPHONE) SensorType.CAMERA else SensorType.MICROPHONE
-        val otherActive = activeOps.any { it.endsWith(":${otherSensor.name}") }
-        if (otherActive) score += 20
+        if (activeOps.any { it.endsWith(":${otherSensor.name}") }) score += 20
 
-        // Repeat within 60s
         val lastTime = lastDetectionTime[packageName]
         if (lastTime != null && (now - lastTime) < REPEAT_WINDOW_MS) score += 10
 
         return score.coerceIn(0, 100)
     }
 
-    private fun isKnownSystemPackage(packageName: String): Boolean {
-        return packageName.startsWith("com.android.") ||
-               packageName.startsWith("com.google.android.") ||
-               packageName.startsWith("android.")
-    }
+    private fun isKnownSystemPackage(packageName: String): Boolean =
+        packageName.startsWith("com.android.") ||
+        packageName.startsWith("com.google.android.") ||
+        packageName.startsWith("android.")
 
     // ===== NOTIFICATION =====
 
-    /**
-     * Ensures the notification channel exists before startForeground() is called.
-     * Normally the channel is created in LibertyShieldApp.onCreate(), but we create
-     * it here as a safety net for the BootReceiver path where Application.onCreate()
-     * runs but the channel may not have been registered yet on older ROMs.
-     * Safe to call multiple times — NotificationManager ignores duplicate creates.
-     */
     private fun createNotificationChannel() {
         val channel = NotificationChannel(
             CHANNEL_ID,
@@ -321,8 +361,8 @@ class SensorMonitorService : Service() {
             enableVibration(false)
             enableLights(false)
         }
-        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        nm.createNotificationChannel(channel)
+        (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
+            .createNotificationChannel(channel)
     }
 
     private fun buildNotification() = NotificationCompat.Builder(this, CHANNEL_ID)
@@ -340,14 +380,31 @@ class SensorMonitorService : Service() {
         )
         .build()
 
-    // ===== WORKMANAGER RESTART =====
+    // ===== SYNC HEARTBEAT =====
 
-    private fun scheduleWorkManagerRestart() {
+    /**
+     * Enqueues the periodic sync worker.
+     * Called each time the service starts so the job is always registered even
+     * after a fresh install or after WorkManager's internal DB is cleared.
+     * KEEP policy: if already scheduled, leaves it alone.
+     */
+    private fun enqueueSyncHeartbeat() {
         try {
-            val request = OneTimeWorkRequestBuilder<SyncWorker>().build()
-            WorkManager.getInstance(applicationContext).enqueue(request)
+            val constraints = Constraints.Builder()
+                .setRequiredNetworkType(NetworkType.CONNECTED)
+                .build()
+
+            val request = PeriodicWorkRequestBuilder<SyncWorker>(
+                15, TimeUnit.MINUTES
+            ).setConstraints(constraints).build()
+
+            WorkManager.getInstance(applicationContext).enqueueUniquePeriodicWork(
+                SyncWorker.WORK_NAME,
+                ExistingPeriodicWorkPolicy.KEEP,
+                request
+            )
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to schedule WorkManager restart: ${e.message}")
+            Log.e(TAG, "Failed to enqueue sync heartbeat: ${e.message}")
         }
     }
 }
