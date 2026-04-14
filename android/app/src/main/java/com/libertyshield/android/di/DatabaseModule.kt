@@ -60,7 +60,16 @@ object DatabaseModule {
     @Provides
     @Singleton
     fun provideAppDatabase(@ApplicationContext context: Context): AppDatabase {
-        return createDatabase(context, allowRetry = true)
+        // Top-level guard: if createDatabase() throws for any reason (Keystore failure,
+        // passphrase failure, SQLCipher failure), we fall back to an in-memory DB here
+        // rather than letting the exception reach Hilt's lazy singleton creation, which
+        // happens during the first Compose frame and cannot be caught in onCreate().
+        return try {
+            createDatabase(context, allowRetry = true)
+        } catch (e: Throwable) {
+            Log.e(TAG, "All encrypted DB creation paths failed — using in-memory fallback: ${e.message}", e)
+            buildInMemoryDatabase(context)
+        }
     }
 
     @Provides
@@ -72,20 +81,21 @@ object DatabaseModule {
     /**
      * Creates the encrypted Room database.
      *
-     * If the first attempt fails (passphrase mismatch after a partial data-clear or
-     * reinstall with Keystore key still present), wipes the database file plus the
-     * stored passphrase and tries again with a freshly generated passphrase.
-     * Historical events are lost, but the app stays functional.
+     * Attempt order:
+     *   1. Open existing encrypted DB with current passphrase.
+     *   2. On failure (passphrase mismatch): wipe DB files + passphrase, retry once.
+     *   3. On second failure: return in-memory Room DB — events not persisted, but app stays live.
      *
-     * If even the recovery attempt fails, the exception is re-thrown so Hilt fails fast
-     * with a clear stack trace rather than a cryptic later crash.
+     * Note: getOrCreatePassphrase() is called OUTSIDE the inner try/catch intentionally;
+     * if it throws (Keystore hard failure), the exception propagates to provideAppDatabase()
+     * which has the top-level fallback guard.
      */
     private fun createDatabase(context: Context, allowRetry: Boolean): AppDatabase {
         val passphrase = getOrCreatePassphrase(context)
         return try {
             buildDatabase(context, passphrase)
         } catch (e: Throwable) {
-            Log.e(TAG, "AppDatabase.create() failed: ${e.message}", e)
+            Log.e(TAG, "AppDatabase open failed: ${e.message}", e)
             passphrase.fill(0)
 
             if (allowRetry) {
@@ -95,30 +105,29 @@ object DatabaseModule {
                 } catch (wipeEx: Exception) {
                     Log.e(TAG, "Failed to wipe database during recovery: ${wipeEx.message}")
                 }
-                createDatabase(context, allowRetry = false)  // one retry, no further recursion
+                createDatabase(context, allowRetry = false)
             } else {
-                // Both the initial open and the recovery attempt failed.
-                // Fall back to an in-memory (unencrypted) database so the app can still
-                // launch and show diagnostics. Events will not persist across restarts,
-                // but the app will not crash on cold launch.
-                Log.e(TAG, "Database recovery failed — falling back to in-memory database. Events will not be persisted.")
-                try {
-                    Room.inMemoryDatabaseBuilder(
-                        context.applicationContext,
-                        AppDatabase::class.java
-                    )
-                        .fallbackToDestructiveMigration()
-                        .build()
-                } catch (fallbackEx: Throwable) {
-                    // Truly unrecoverable — even an in-memory Room failed.
-                    // Rethrow so the crash is visible in the logs with the original cause.
-                    Log.e(TAG, "In-memory fallback also failed: ${fallbackEx.message}", fallbackEx)
-                    throw e
-                }
+                Log.e(TAG, "Database recovery failed — falling back to in-memory database")
+                buildInMemoryDatabase(context)
             }
         } finally {
             passphrase.fill(0)
         }
+    }
+
+    /**
+     * Last-resort database: non-encrypted, non-persistent in-memory Room instance.
+     * Allows the app to launch and show diagnostics when all encrypted DB paths fail.
+     * Events written here are lost on process death.
+     */
+    private fun buildInMemoryDatabase(context: Context): AppDatabase {
+        Log.w(TAG, "Opening in-memory AppDatabase — events will NOT be persisted")
+        return Room.inMemoryDatabaseBuilder(
+            context.applicationContext,
+            AppDatabase::class.java
+        )
+            .fallbackToDestructiveMigration()
+            .build()
     }
 
     private fun buildDatabase(context: Context, passphrase: ByteArray): AppDatabase {
